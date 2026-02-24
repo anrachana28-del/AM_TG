@@ -3,108 +3,97 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Telegram Add Member Ultimate - Firebase</title>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<title>Telegram Tool</title>
 <style>
-body{font-family:sans-serif;background:#0f172a;color:#fff;padding:20px}
-.container{max-width:780px;margin:auto;background:#1e293b;padding:30px;border-radius:18px}
-h2,h3{color:#38bdf8}
-input,textarea,select,button{width:100%;padding:10px;margin:6px 0;border-radius:8px;border:none;background:#020617;color:#fff}
-button{cursor:pointer;font-weight:600}
-.start{background:#22c55e}
-.stop{background:#ef4444}
-.restart{background:#f59e0b}
-#accountModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999}
-#accountModal.show{display:flex;justify-content:center;align-items:flex-start}
-#modalContent{background:#1e293b;margin-top:40px;padding:20px;border-radius:14px;width:95%;max-width:760px;position:absolute}
-table{width:100%;border-collapse:collapse;margin-top:10px}
-th,td{border:1px solid #334155;padding:6px;font-size:14px}
-th{background:#020617}
-.blocked{opacity:.55}
-.reason{font-size:12px;color:#fbbf24}
-#memberList{height:200px;overflow:auto;font-family:monospace;background:#020617;padding:10px;border-radius:8px;margin-top:10px;}
-.filter-row{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap}
-.filter-row div{flex:1;min-width:120px}
+body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
+input, button { padding: 8px; margin: 4px 0; width: 300px; }
+h2 { margin-top: 20px; }
+ul { background: #fff; padding: 10px; max-height: 200px; overflow-y: auto; }
 </style>
 </head>
 <body>
-<div class="container">
-<h2>Telegram Add Member Ultimate</h2>
 
-<button onclick="openModal()">Upload / Select Accounts</button>
+<h2>1️⃣ Upload Telegram Account</h2>
+<form id="uploadForm">
+  <input type="text" name="api_id" placeholder="API ID" required><br>
+  <input type="text" name="api_hash" placeholder="API HASH" required><br>
+  <input type="text" name="session" placeholder="SESSION STRING" required><br>
+  <button type="submit">Upload Account</button>
+</form>
 
-<h3>Source Group</h3>
-<input id="sourceGroup">
+<h2>2️⃣ Export Members from Group</h2>
+<input type="text" id="groupLink" placeholder="Enter Telegram Group Link">
+<button id="exportBtn">Export Members</button>
 
-<div class="filter-row">
-  <div>
-    <label>Members:</label>
-    <select id="filterMembers">
-      <option value="all" selected>All</option>
-      <option value="username">Username Only</option>
-    </select>
-  </div>
-  <div>
-    <label>Last Online:</label>
-    <select id="filterLastOnline">
-      <option value="all" selected>All</option>
-      <option value="week">This Week</option>
-      <option value="month">This Month</option>
-    </select>
-  </div>
-  <div>
-    <label>Profile Photo:</label>
-    <select id="filterPhoto">
-      <option value="all" selected>All</option>
-      <option value="has">Has Photo</option>
-    </select>
-  </div>
-</div>
+<h3>Exported Members:</h3>
+<ul id="memberList"></ul>
 
-<h3>Member IDs / Usernames</h3>
-<textarea id="users" placeholder="IDs/Usernames"></textarea>
-<button onclick="applyFiltersBySource()" style="margin-top:8px;background:#0ea5e9;color:#fff;font-weight:600;">Export Members Here</button>
+<h3>Export Requests Status:</h3>
+<ul id="statusList"></ul>
 
-<div style="display:flex;gap:8px;margin-top:10px">
-  <button class="start" onclick="startAddMembersLoop()">Start</button>
-  <button class="stop" onclick="stopAddMembersLoop()">Stop</button>
-  <button class="restart" onclick="restart()">Restart</button>
-  <button onclick="exportMembersCSV()" style="background:#0ea5e9;color:#fff;font-weight:600;">Export Members CSV</button>
-</div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-app.js";
+import { getDatabase, ref, push, onValue } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
 
-<h3>Members Log</h3>
-<div id="memberList"></div>
-</div>
+// Firebase config
+const firebaseConfig = {
+  apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
+  authDomain: "tool-add.firebaseapp.com",
+  databaseURL: "https://tool-add-default-rtdb.firebaseio.com",
+  projectId: "tool-add",
+};
 
-<!-- MODAL -->
-<div id="accountModal">
-  <div id="modalContent">
-    <span onclick="closeModal()" style="float:right;cursor:pointer">✖</span>
-    <h3>Accounts Manager</h3>
-    <input type="file" id="envFile" accept=".env">
-    <button onclick="loadEnvFile()">Load .env</button>
-    <div style="display:flex;gap:20px;margin:8px 0">
-      <div>Total: <b id="totalAcc">0</b></div>
-      <div>Blocked: <b id="blockedAcc">0</b></div>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Select</th>
-          <th>Name</th>
-          <th>API ID</th>
-          <th>Phone</th>
-          <th>Status</th>
-          <th>Reason / End</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="modalAccountsList"></tbody>
-    </table>
-  </div>
-</div>
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
-<script src="server.js"></script>
+// Upload Telegram account
+document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const formData = new FormData(e.target);
+  const data = {
+    api_id: formData.get("api_id"),
+    api_hash: formData.get("api_hash"),
+    session: formData.get("session"),
+    createdAt: Date.now()
+  };
+  await push(ref(db, "telegram_accounts"), data);
+  alert("Account uploaded!");
+  e.target.reset();
+});
+
+// Export members
+document.getElementById("exportBtn").addEventListener("click", async () => {
+  const groupLink = document.getElementById("groupLink").value.trim();
+  if (!groupLink) return alert("Enter group link!");
+  await push(ref(db, "export_requests"), { groupLink, createdAt: Date.now(), status: "pending" });
+  alert("Export request sent!");
+});
+
+// Listen for exported members
+const memberList = document.getElementById("memberList");
+onValue(ref(db, "exported_members"), (snapshot) => {
+  const data = snapshot.val();
+  memberList.innerHTML = "";
+  if (!data) return;
+  Object.values(data).forEach(member => {
+    const li = document.createElement("li");
+    li.textContent = member.username ? `@${member.username}` : (member.first_name || "") + " " + (member.last_name || "");
+    memberList.appendChild(li);
+  });
+});
+
+// Listen for export request status
+const statusList = document.getElementById("statusList");
+onValue(ref(db, "export_requests"), (snapshot) => {
+  const data = snapshot.val();
+  statusList.innerHTML = "";
+  if (!data) return;
+  Object.entries(data).forEach(([key, req]) => {
+    const li = document.createElement("li");
+    li.textContent = `${req.groupLink || "Unknown"} → ${req.status}`;
+    statusList.appendChild(li);
+  });
+});
+</script>
 </body>
 </html>
