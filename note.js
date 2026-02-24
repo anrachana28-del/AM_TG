@@ -1,8 +1,9 @@
+// note.js
 import 'dotenv/config'; // loads variables from .env
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/database";
-import { TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions";
+import { TelegramClient } from "telegram/index.js";
+import { StringSession } from "telegram/sessions/index.js";
 
 // Firebase config from environment
 const firebaseConfig = {
@@ -40,8 +41,8 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
         { connectionRetries: 5 }
       );
       await client.start({
-        phoneNumber: async () => "+000000000",
-        password: async () => "",
+        phoneNumber: async () => "+000000000", // only needed first-time login
+        password: async () => "", // 2FA if enabled
       });
       console.log(`Logged in with API_ID ${acc.api_id}`);
 
