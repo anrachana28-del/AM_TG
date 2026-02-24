@@ -1,4 +1,3 @@
-// note.js
 import 'dotenv/config';
 import express from "express";
 import { initializeApp } from "firebase/app";
@@ -6,7 +5,6 @@ import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/
 import { TelegramClient } from "telegram/index.js";
 import { StringSession } from "telegram/sessions/index.js";
 
-// ===== Firebase config =====
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
@@ -17,7 +15,6 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Telegram Accounts =====
 let accountsList = [];
 onValue(ref(db, "telegram_accounts"), (snapshot) => {
   const data = snapshot.val();
@@ -25,12 +22,10 @@ onValue(ref(db, "telegram_accounts"), (snapshot) => {
   console.log(`Loaded ${accountsList.length} Telegram accounts from Firebase`);
 });
 
-// ===== Export Requests Listener =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
   if (!req || !req.groupLink) return;
-
   console.log(`Processing export request: ${req.groupLink}`);
 
   for (let acc of accountsList) {
@@ -41,12 +36,10 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
         acc.api_hash,
         { connectionRetries: 5 }
       );
-
       await client.start({
         phoneNumber: async () => process.env.DEFAULT_PHONE_NUMBER || "+85515318660",
         password: async () => "",
       });
-
       console.log(`Logged in with API_ID ${acc.api_id}`);
 
       const groupEntity = await client.getEntity(req.groupLink);
@@ -72,9 +65,8 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   }
 });
 
-// ===== Minimal Express Server (Keep Live) =====
+// Minimal Express server to keep Render live
 const webApp = express();
 const PORT = process.env.PORT || 3000;
 webApp.get("/", (req, res) => res.send("Telegram Note.js Worker Live"));
 webApp.listen(PORT, () => console.log(`Live server running on port ${PORT}`));
-
