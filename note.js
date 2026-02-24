@@ -1,10 +1,12 @@
+// note.js
 import 'dotenv/config';
+import express from "express";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/database";
 import { TelegramClient } from "telegram/index.js";
 import { StringSession } from "telegram/sessions/index.js";
 
-// Firebase config
+// ===== Firebase config =====
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
@@ -12,18 +14,18 @@ const firebaseConfig = {
   projectId: process.env.FIREBASE_PROJECT_ID,
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+const appFirebase = initializeApp(firebaseConfig);
+const db = getDatabase(appFirebase);
 
-// Load Telegram accounts from Firebase
+// ===== Telegram Accounts =====
 let accountsList = [];
 onValue(ref(db, "telegram_accounts"), (snapshot) => {
   const data = snapshot.val();
   accountsList = data ? Object.values(data) : [];
-  console.log(`Loaded ${accountsList.length} Telegram accounts`);
+  console.log(`Loaded ${accountsList.length} Telegram accounts from Firebase`);
 });
 
-// Listen export requests
+// ===== Export Requests Listener =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
@@ -42,7 +44,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
       await client.start({
         phoneNumber: async () => process.env.DEFAULT_PHONE_NUMBER || "+000000000",
-        password: async () => "", // 2FA if enabled
+        password: async () => "",
       });
 
       console.log(`Logged in with API_ID ${acc.api_id}`);
@@ -62,10 +64,16 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
       await update(ref(db, `export_requests/${reqKey}`), { status: "done" });
       console.log(`Exported ${participants.length} members for ${req.groupLink}`);
-      break; // stop after first successful account
+      break;
     } catch (err) {
       console.error(`Failed with account ${acc.api_id}: ${err.message}`);
       await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
     }
   }
 });
+
+// ===== Minimal Express Server (Keep Live) =====
+const webApp = express();
+const PORT = process.env.PORT || 3000;
+webApp.get("/", (req, res) => res.send("Telegram Note.js Worker Live"));
+webApp.listen(PORT, () => console.log(`Live server running on port ${PORT}`));
