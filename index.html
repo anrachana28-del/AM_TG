@@ -3,29 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Upload Config / Telegram Account</title>
+<title>Telegram Account & Export</title>
 <style>
 body { font-family: Arial; padding: 20px; background: #f0f0f0; }
-.container { max-width: 500px; margin: auto; background: #fff; padding: 20px; border-radius: 10px; }
-input, button { width: 100%; padding: 10px; margin: 10px 0; }
+.container { max-width: 600px; margin: auto; background: #fff; padding: 20px; border-radius: 10px; }
+input, textarea, button { width: 100%; padding: 10px; margin: 10px 0; }
+textarea { resize: vertical; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h2>Upload Telegram Config</h2>
-  <input type="text" id="api_id" placeholder="API_ID">
-  <input type="text" id="api_hash" placeholder="API_HASH">
-  <input type="text" id="session" placeholder="SESSION">
-  <input type="text" id="default_phone" placeholder="Default Phone (+855...)">
-  <button id="uploadBtn">Upload to Firebase</button>
+  <h2>Upload .env File / Telegram Account</h2>
+  <input type="file" id="fileInput" accept=".env">
+  <button id="uploadBtn">Upload Accounts</button>
   <div id="status"></div>
+
+  <hr>
+
+  <h2>Group Links for Member Export</h2>
+  <textarea id="groupLinks" rows="5" placeholder="Enter one group link per line"></textarea>
+  <button id="addGroupsBtn">Save Group Links</button>
+  <div id="groupsStatus"></div>
 </div>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-app.js";
 import { getDatabase, ref, push, set } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
 
-// Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
   authDomain: "tool-add.firebaseapp.com",
@@ -36,29 +40,46 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-document.getElementById("uploadBtn").addEventListener("click", async () => {
-  const api_id = document.getElementById("api_id").value.trim();
-  const api_hash = document.getElementById("api_hash").value.trim();
-  const session = document.getElementById("session").value.trim();
-  const default_phone = document.getElementById("default_phone").value.trim();
-
-  if (!api_id || !api_hash || !session) {
-    return alert("API_ID, API_HASH, SESSION are required!");
-  }
-
-  try {
-    // Save Telegram account
-    await push(ref(db, "telegram_accounts"), { api_id, api_hash, session });
-
-    // Save default phone in Firebase (for note.js)
-    if (default_phone) {
-      await set(ref(db, "config/default_phone"), default_phone);
+// Upload .env
+document.getElementById("uploadBtn").addEventListener("click", () => {
+  const file = document.getElementById("fileInput").files[0];
+  if (!file) return alert("Select a .env file");
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const lines = e.target.result.split(/\r?\n/);
+    let success = 0, fail = 0;
+    for (let line of lines) {
+      line = line.trim();
+      if (!line || line.startsWith("#")) continue;
+      const [key, value] = line.split("=");
+      if (!key || !value) { fail++; continue; }
+      try {
+        if (key.startsWith("API_ID") || key.startsWith("API_HASH") || key.startsWith("SESSION")) {
+          const index = key.match(/\d+/)[0];
+          await push(ref(db, `telegram_accounts/${index}`), { [key]: value });
+        }
+        if (key.startsWith("PHONE")) {
+          await set(ref(db, `config/default_phone`), value);
+        }
+        success++;
+      } catch { fail++; }
     }
+    document.getElementById("status").innerText = `✅ Uploaded: ${success} | ❌ Failed: ${fail}`;
+  };
+  reader.readAsText(file);
+});
 
-    document.getElementById("status").innerText = "✅ Uploaded successfully!";
-  } catch (err) {
-    document.getElementById("status").innerText = "❌ Upload failed: " + err.message;
+// Save group links
+document.getElementById("addGroupsBtn").addEventListener("click", async () => {
+  const links = document.getElementById("groupLinks").value.trim().split(/\r?\n/);
+  let success = 0, fail = 0;
+  for (let link of links) {
+    if (!link) continue;
+    try { await push(ref(db, "export_requests"), { groupLink: link, status: "pending" }); success++; } 
+    catch { fail++; }
   }
+  document.getElementById("groupsStatus").innerText = `✅ Saved: ${success} | ❌ Failed: ${fail}`;
+  document.getElementById("groupLinks").value = "";
 });
 </script>
 </body>
