@@ -1,64 +1,155 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Telegram .env Upload</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Telegram Export Member</title>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family: monospace;
+  background:#020617;
+  color:#e5e7eb;
+  display:flex;
+  justify-content:center;
+  padding:20px;
+}
+.container{
+  width:100%;
+  max-width:900px;
+  background:#020617;
+  border:1px solid #1e293b;
+  border-radius:10px;
+  padding:20px;
+}
+h1{
+  font-size:20px;
+  margin-bottom:15px;
+  color:#38bdf8;
+}
+label{
+  display:block;
+  margin-bottom:6px;
+  color:#94a3b8;
+}
+input{
+  width:100%;
+  padding:10px;
+  background:#020617;
+  border:1px solid #334155;
+  color:#e5e7eb;
+  border-radius:6px;
+}
+button{
+  margin-top:10px;
+  padding:10px 15px;
+  background:#0284c7;
+  border:none;
+  color:white;
+  border-radius:6px;
+  cursor:pointer;
+}
+button:hover{background:#0369a1}
+.status{
+  margin-top:10px;
+  font-size:14px;
+}
+.list-box{
+  margin-top:20px;
+  background:#000;
+  border:1px solid #334155;
+  border-radius:8px;
+  padding:10px;
+  height:300px;
+  overflow:auto;
+  white-space:pre;
+}
+.user{
+  color:#22c55e;
+}
+</style>
 </head>
+
 <body>
-<h2>Upload .env Telegram Accounts</h2>
-<input type="file" id="fileInput" accept=".env">
-<button id="uploadBtn">Upload Accounts</button>
-<div id="status"></div>
+<div class="container">
+  <h1>📤 Telegram Group Export Member</h1>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-app.js";
-import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
+  <label>🔗 Group Link</label>
+  <input id="groupLink" placeholder="https://t.me/your_group"/>
 
+  <button onclick="exportMembers()">Export Members</button>
+
+  <div class="status" id="status">Status: idle</div>
+
+  <div class="list-box" id="listBox">
+    Waiting export...
+  </div>
+</div>
+
+<script>
+/* ===== Firebase Config ===== */
 const firebaseConfig = {
   apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
   authDomain: "tool-add.firebaseapp.com",
   databaseURL: "https://tool-add-default-rtdb.firebaseio.com/",
   projectId: "tool-add"
 };
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+/* ===== Export Members ===== */
+function exportMembers(){
+  const groupLink = document.getElementById("groupLink").value.trim();
+  if(!groupLink){
+    alert("Please enter group link");
+    return;
+  }
 
-document.getElementById("uploadBtn").addEventListener("click", () => {
-  const file = document.getElementById("fileInput").files[0];
-  if (!file) return alert("Select a .env file");
+  const reqRef = db.ref("export_requests").push();
+  reqRef.set({
+    groupLink,
+    status:"pending",
+    createdAt:Date.now()
+  });
 
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    const lines = e.target.result.split(/\r?\n/);
-    let success = 0, fail = 0;
+  document.getElementById("status").innerText =
+    "Status: exporting...";
+  document.getElementById("listBox").innerText =
+    "Export started...\n";
 
-    for (let line of lines) {
-      line = line.trim();
-      if (!line || line.startsWith("#")) continue;
-      const [key, value] = line.split("=");
-      if (!key || !value) { fail++; continue; }
+  listenMembers(reqRef.key);
+}
 
-      try {
-        // Telegram account auto-create collection
-        if (key.startsWith("API_ID") || key.startsWith("API_HASH") || key.startsWith("SESSION")) {
-          const index = key.match(/\d+/)[0];
-          await set(ref(db, `telegram_accounts/${index}/${key}`), value);
-        }
-        // Default phone
-        if (key.startsWith("PHONE") || key === "DEFAULT_PHONE_NUMBER") {
-          await set(ref(db, `config/default_phone`), value);
-        }
-        success++;
-      } catch {
-        fail++;
-      }
+/* ===== Listen Exported Members ===== */
+function listenMembers(reqKey){
+  const membersRef = db.ref(`exported_members/${reqKey}/members`);
+  const listBox = document.getElementById("listBox");
+  listBox.innerText = "";
+
+  membersRef.on("child_added", snap=>{
+    const u = snap.val();
+    if(u.username){
+      const line = document.createElement("div");
+      line.className = "user";
+      line.textContent = "@" + u.username;
+      listBox.appendChild(line);
     }
-    document.getElementById("status").innerText = `✅ Uploaded: ${success} | ❌ Failed: ${fail}`;
-  };
-  reader.readAsText(file);
-});
+  });
+
+  db.ref(`export_requests/${reqKey}/status`)
+    .on("value", snap=>{
+      if(snap.val()==="done"){
+        document.getElementById("status").innerText =
+          "Status: ✅ done";
+      }
+    });
+}
 </script>
 </body>
 </html>
