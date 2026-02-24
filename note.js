@@ -1,72 +1,75 @@
-import 'dotenv/config';
-import express from "express";
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/database";
-import { TelegramClient } from "telegram/index.js";
-import { StringSession } from "telegram/sessions/index.js";
+import 'dotenv/config'
+import { TelegramClient } from 'telegram'
+import { StringSession } from 'telegram/sessions'
+import { initializeApp } from 'firebase/app'
+import { getDatabase, ref, onChildAdded, set, push, update } from 'firebase/database'
 
+/* ========= Firebase ========= */
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.FIREBASE_DB_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-};
+  apiKey: process.env.FB_API_KEY,
+  authDomain: process.env.FB_AUTH_DOMAIN,
+  databaseURL: process.env.FB_DB_URL,
+  projectId: process.env.FB_PROJECT_ID,
+}
+const app = initializeApp(firebaseConfig)
+const db = getDatabase(app)
 
-const appFirebase = initializeApp(firebaseConfig);
-const db = getDatabase(appFirebase);
+/* ========= Telegram ========= */
+const apiId = Number(process.env.API_ID_1)
+const apiHash = process.env.API_HASH_1
+const stringSession = new StringSession(process.env.SESSION_1)
 
-let accountsList = [];
-onValue(ref(db, "telegram_accounts"), (snapshot) => {
-  const data = snapshot.val();
-  accountsList = data ? Object.values(data) : [];
-  console.log(`Loaded ${accountsList.length} Telegram accounts from Firebase`);
-});
+const client = new TelegramClient(
+  stringSession,
+  apiId,
+  apiHash,
+  { connectionRetries: 5 }
+)
 
-onChildAdded(ref(db, "export_requests"), async (snapshot) => {
-  const reqKey = snapshot.key;
-  const req = snapshot.val();
-  if (!req || !req.groupLink) return;
-  console.log(`Processing export request: ${req.groupLink}`);
+await client.start()
+console.log("✅ Telegram connected")
 
-  for (let acc of accountsList) {
-    try {
-      const client = new TelegramClient(
-        new StringSession(acc.session),
-        parseInt(acc.api_id),
-        acc.api_hash,
-        { connectionRetries: 5 }
-      );
-      await client.start({
-        phoneNumber: async () => process.env.DEFAULT_PHONE_NUMBER || "+85515318660",
-        password: async () => "",
-      });
-      console.log(`Logged in with API_ID ${acc.api_id}`);
+/* ========= Listen Export Requests ========= */
+const requestRef = ref(db, "export_requests")
 
-      const groupEntity = await client.getEntity(req.groupLink);
-      const participants = await client.getParticipants(groupEntity, { limit: 1000 });
+onChildAdded(requestRef, async snap => {
+  const reqId = snap.key
+  const data = snap.val()
 
-      for (let user of participants) {
-        await push(ref(db, "exported_members"), {
-          id: user.id,
-          username: user.username || null,
-          first_name: user.firstName || null,
-          last_name: user.lastName || null,
-          createdAt: Date.now()
-        });
-      }
+  if (data.status !== "pending") return
 
-      await update(ref(db, `export_requests/${reqKey}`), { status: "done" });
-      console.log(`Exported ${participants.length} members for ${req.groupLink}`);
-      break;
-    } catch (err) {
-      console.error(`Failed with account ${acc.api_id}: ${err.message}`);
-      await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
+  console.log("📤 Export request:", data.groupLink)
+
+  await update(ref(db, `export_requests/${reqId}`), {
+    status: "running"
+  })
+
+  try {
+    const group = await client.getEntity(data.groupLink)
+    const members = await client.getParticipants(group, { aggressive: true })
+
+    for (const user of members) {
+      if (!user.username) continue
+
+      await push(ref(db, `exported_members/${reqId}/members`), {
+        id: user.id,
+        username: user.username,
+        first_name: user.firstName || ""
+      })
     }
-  }
-});
 
-// Minimal Express server to keep Render live
-const webApp = express();
-const PORT = process.env.PORT || 3000;
-webApp.get("/", (req, res) => res.send("Telegram Note.js Worker Live"));
-webApp.listen(PORT, () => console.log(`Live server running on port ${PORT}`));
+    await update(ref(db, `export_requests/${reqId}`), {
+      status: "done",
+      total: members.length
+    })
+
+    console.log("✅ Export done:", members.length)
+
+  } catch (err) {
+    console.error(err)
+    await update(ref(db, `export_requests/${reqId}`), {
+      status: "error",
+      error: err.message
+    })
+  }
+})
