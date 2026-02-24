@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "firebase": "^10.3.0",
-    "telegram": "^2.0.0",
-    "input": "^0.5.0"
+    "telegram": "^2.0.0"
   }
 }
