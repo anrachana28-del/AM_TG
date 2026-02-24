@@ -3,96 +3,62 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Telegram Tool</title>
+<title>Upload Config / Telegram Account</title>
 <style>
-body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
-input, button { padding: 8px; margin: 4px 0; width: 300px; }
-h2 { margin-top: 20px; }
-ul { background: #fff; padding: 10px; max-height: 200px; overflow-y: auto; }
+body { font-family: Arial; padding: 20px; background: #f0f0f0; }
+.container { max-width: 500px; margin: auto; background: #fff; padding: 20px; border-radius: 10px; }
+input, button { width: 100%; padding: 10px; margin: 10px 0; }
 </style>
 </head>
 <body>
-
-<h2>1️⃣ Upload Telegram Account</h2>
-<form id="uploadForm">
-  <input type="text" name="api_id" placeholder="API ID" required><br>
-  <input type="text" name="api_hash" placeholder="API HASH" required><br>
-  <input type="text" name="session" placeholder="SESSION STRING" required><br>
-  <button type="submit">Upload Account</button>
-</form>
-
-<h2>2️⃣ Export Members from Group</h2>
-<input type="text" id="groupLink" placeholder="Enter Telegram Group Link">
-<button id="exportBtn">Export Members</button>
-
-<h3>Exported Members:</h3>
-<ul id="memberList"></ul>
-
-<h3>Export Requests Status:</h3>
-<ul id="statusList"></ul>
+<div class="container">
+  <h2>Upload Telegram Config</h2>
+  <input type="text" id="api_id" placeholder="API_ID">
+  <input type="text" id="api_hash" placeholder="API_HASH">
+  <input type="text" id="session" placeholder="SESSION">
+  <input type="text" id="default_phone" placeholder="Default Phone (+855...)">
+  <button id="uploadBtn">Upload to Firebase</button>
+  <div id="status"></div>
+</div>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-app.js";
-import { getDatabase, ref, push, onValue } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
+import { getDatabase, ref, push, set } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
 
 // Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
   authDomain: "tool-add.firebaseapp.com",
-  databaseURL: "https://tool-add-default-rtdb.firebaseio.com",
-  projectId: "tool-add",
+  databaseURL: "https://tool-add-default-rtdb.firebaseio.com/",
+  projectId: "tool-add"
 };
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// Upload Telegram account
-document.getElementById("uploadForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const formData = new FormData(e.target);
-  const data = {
-    api_id: formData.get("api_id"),
-    api_hash: formData.get("api_hash"),
-    session: formData.get("session"),
-    createdAt: Date.now()
-  };
-  await push(ref(db, "telegram_accounts"), data);
-  alert("Account uploaded!");
-  e.target.reset();
-});
+document.getElementById("uploadBtn").addEventListener("click", async () => {
+  const api_id = document.getElementById("api_id").value.trim();
+  const api_hash = document.getElementById("api_hash").value.trim();
+  const session = document.getElementById("session").value.trim();
+  const default_phone = document.getElementById("default_phone").value.trim();
 
-// Export members
-document.getElementById("exportBtn").addEventListener("click", async () => {
-  const groupLink = document.getElementById("groupLink").value.trim();
-  if (!groupLink) return alert("Enter group link!");
-  await push(ref(db, "export_requests"), { groupLink, createdAt: Date.now(), status: "pending" });
-  alert("Export request sent!");
-});
+  if (!api_id || !api_hash || !session) {
+    return alert("API_ID, API_HASH, SESSION are required!");
+  }
 
-// Listen for exported members
-const memberList = document.getElementById("memberList");
-onValue(ref(db, "exported_members"), (snapshot) => {
-  const data = snapshot.val();
-  memberList.innerHTML = "";
-  if (!data) return;
-  Object.values(data).forEach(member => {
-    const li = document.createElement("li");
-    li.textContent = member.username ? `@${member.username}` : (member.first_name || "") + " " + (member.last_name || "");
-    memberList.appendChild(li);
-  });
-});
+  try {
+    // Save Telegram account
+    await push(ref(db, "telegram_accounts"), { api_id, api_hash, session });
 
-// Listen for export request status
-const statusList = document.getElementById("statusList");
-onValue(ref(db, "export_requests"), (snapshot) => {
-  const data = snapshot.val();
-  statusList.innerHTML = "";
-  if (!data) return;
-  Object.entries(data).forEach(([key, req]) => {
-    const li = document.createElement("li");
-    li.textContent = `${req.groupLink || "Unknown"} → ${req.status}`;
-    statusList.appendChild(li);
-  });
+    // Save default phone in Firebase (for note.js)
+    if (default_phone) {
+      await set(ref(db, "config/default_phone"), default_phone);
+    }
+
+    document.getElementById("status").innerText = "✅ Uploaded successfully!";
+  } catch (err) {
+    document.getElementById("status").innerText = "❌ Upload failed: " + err.message;
+  }
 });
 </script>
 </body>
