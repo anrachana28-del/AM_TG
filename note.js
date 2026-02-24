@@ -1,14 +1,15 @@
+import 'dotenv/config'; // loads variables from .env
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
 
-// Firebase config
+// Firebase config from environment
 const firebaseConfig = {
-  apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
-  authDomain: "tool-add.firebaseapp.com",
-  databaseURL: "https://tool-add-default-rtdb.firebaseio.com",
-  projectId: "tool-add",
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.FIREBASE_DB_URL,
+  projectId: process.env.FIREBASE_PROJECT_ID,
 };
 
 const app = initializeApp(firebaseConfig);
