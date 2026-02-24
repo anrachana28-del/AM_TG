@@ -43,7 +43,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
       );
 
       await client.start({
-        phoneNumber: async () => process.env.DEFAULT_PHONE_NUMBER || "+000000000",
+        phoneNumber: async () => process.env.DEFAULT_PHONE_NUMBER || "+85515318660",
         password: async () => "",
       });
 
@@ -77,3 +77,4 @@ const webApp = express();
 const PORT = process.env.PORT || 3000;
 webApp.get("/", (req, res) => res.send("Telegram Note.js Worker Live"));
 webApp.listen(PORT, () => console.log(`Live server running on port ${PORT}`));
+
