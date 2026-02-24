@@ -2,7 +2,6 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
-import input from "input"; // npm i input
 
 // Firebase config
 const firebaseConfig = {
@@ -33,7 +32,12 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
   for (let acc of accountsList) {
     try {
-      const client = new TelegramClient(new StringSession(acc.session), parseInt(acc.api_id), acc.api_hash, { connectionRetries: 5 });
+      const client = new TelegramClient(
+        new StringSession(acc.session),
+        parseInt(acc.api_id),
+        acc.api_hash,
+        { connectionRetries: 5 }
+      );
       await client.start({
         phoneNumber: async () => "+000000000",
         password: async () => "",
