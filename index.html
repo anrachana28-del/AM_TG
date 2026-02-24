@@ -3,32 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Telegram Account & Export</title>
-<style>
-body { font-family: Arial; padding: 20px; background: #f0f0f0; }
-.container { max-width: 600px; margin: auto; background: #fff; padding: 20px; border-radius: 10px; }
-input, textarea, button { width: 100%; padding: 10px; margin: 10px 0; }
-textarea { resize: vertical; }
-</style>
+<title>Telegram .env Upload</title>
 </head>
 <body>
-<div class="container">
-  <h2>Upload .env File / Telegram Account</h2>
-  <input type="file" id="fileInput" accept=".env">
-  <button id="uploadBtn">Upload Accounts</button>
-  <div id="status"></div>
-
-  <hr>
-
-  <h2>Group Links for Member Export</h2>
-  <textarea id="groupLinks" rows="5" placeholder="Enter one group link per line"></textarea>
-  <button id="addGroupsBtn">Save Group Links</button>
-  <div id="groupsStatus"></div>
-</div>
+<h2>Upload .env Telegram Accounts</h2>
+<input type="file" id="fileInput" accept=".env">
+<button id="uploadBtn">Upload Accounts</button>
+<div id="status"></div>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-app.js";
-import { getDatabase, ref, push, set } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
+import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.3.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
@@ -40,46 +25,39 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// Upload .env
 document.getElementById("uploadBtn").addEventListener("click", () => {
   const file = document.getElementById("fileInput").files[0];
   if (!file) return alert("Select a .env file");
+
   const reader = new FileReader();
   reader.onload = async (e) => {
     const lines = e.target.result.split(/\r?\n/);
     let success = 0, fail = 0;
+
     for (let line of lines) {
       line = line.trim();
       if (!line || line.startsWith("#")) continue;
       const [key, value] = line.split("=");
       if (!key || !value) { fail++; continue; }
+
       try {
+        // Telegram account auto-create collection
         if (key.startsWith("API_ID") || key.startsWith("API_HASH") || key.startsWith("SESSION")) {
           const index = key.match(/\d+/)[0];
-          await push(ref(db, `telegram_accounts/${index}`), { [key]: value });
+          await set(ref(db, `telegram_accounts/${index}/${key}`), value);
         }
-        if (key.startsWith("PHONE")) {
+        // Default phone
+        if (key.startsWith("PHONE") || key === "DEFAULT_PHONE_NUMBER") {
           await set(ref(db, `config/default_phone`), value);
         }
         success++;
-      } catch { fail++; }
+      } catch {
+        fail++;
+      }
     }
     document.getElementById("status").innerText = `✅ Uploaded: ${success} | ❌ Failed: ${fail}`;
   };
   reader.readAsText(file);
-});
-
-// Save group links
-document.getElementById("addGroupsBtn").addEventListener("click", async () => {
-  const links = document.getElementById("groupLinks").value.trim().split(/\r?\n/);
-  let success = 0, fail = 0;
-  for (let link of links) {
-    if (!link) continue;
-    try { await push(ref(db, "export_requests"), { groupLink: link, status: "pending" }); success++; } 
-    catch { fail++; }
-  }
-  document.getElementById("groupsStatus").innerText = `✅ Saved: ${success} | ❌ Failed: ${fail}`;
-  document.getElementById("groupLinks").value = "";
 });
 </script>
 </body>
