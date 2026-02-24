@@ -1,11 +1,10 @@
-// note.js
-import 'dotenv/config'; // loads variables from .env
+import 'dotenv/config';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, onChildAdded, push, update } from "firebase/database";
 import { TelegramClient } from "telegram/index.js";
 import { StringSession } from "telegram/sessions/index.js";
 
-// Firebase config from environment
+// Firebase config
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
@@ -16,7 +15,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// Fetch Telegram accounts
+// Load Telegram accounts from Firebase
 let accountsList = [];
 onValue(ref(db, "telegram_accounts"), (snapshot) => {
   const data = snapshot.val();
@@ -40,10 +39,12 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
         acc.api_hash,
         { connectionRetries: 5 }
       );
+
       await client.start({
-        phoneNumber: async () => "+000000000", // only needed first-time login
+        phoneNumber: async () => process.env.DEFAULT_PHONE_NUMBER || "+000000000",
         password: async () => "", // 2FA if enabled
       });
+
       console.log(`Logged in with API_ID ${acc.api_id}`);
 
       const groupEntity = await client.getEntity(req.groupLink);
