@@ -15,16 +15,18 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Export Requests Listener =====
+// ===== Export Requests Listener (Safe) =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
+
   if (!req || !req.groupLink || !req.createdBy) return;
+  if (req.status && req.status !== "pending") return; // only pending requests
 
   const userKey = req.createdBy;
   console.log(`Processing export request by ${userKey}: ${req.groupLink}`);
 
-  // Load all accounts for this user
+  // Load accounts for this user
   const accountsSnap = await get(ref(db, "telegram_accounts"));
   const allAccounts = accountsSnap.val() || {};
   const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
@@ -48,7 +50,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
       const groupEntity = await client.getEntity(req.groupLink);
 
-      // Export members with full profile
+      // Export members safely
       for await (const user of client.iterParticipants(groupEntity)) {
         let profilePhoto = null;
         try {
@@ -62,14 +64,16 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
           firstName: user.firstName || null,
           lastName: user.lastName || null,
           profilePhoto,
+          groupLink: req.groupLink, // add groupLink for history page
           createdAt: Date.now()
         });
       }
 
       // Mark request as done
-      await update(ref(db, `export_requests/${reqKey}`), { status: "done" });
+      await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
       console.log(`✅ Exported members for ${req.groupLink}`);
       break; // stop after first working account
+
     } catch (err) {
       console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
       await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
