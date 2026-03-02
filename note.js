@@ -1,10 +1,8 @@
 import 'dotenv/config';
-import express from "express";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, push, update, onChildAdded } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import fs from "fs";
 
 // ===== Firebase config =====
 const firebaseConfig = {
@@ -23,9 +21,9 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   if (!req || !req.groupLink || !req.createdBy) return;
 
   const userKey = req.createdBy;
+  if(req.status !== "pending") return; // Only start if pending
   console.log(`Processing export request by ${userKey}: ${req.groupLink}`);
 
-  // Load all accounts and filter by user
   const accountsSnap = await get(ref(db, "telegram_accounts"));
   const allAccounts = accountsSnap.val() || {};
   const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
@@ -51,21 +49,20 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
       // Fetch participants
       for await (const user of client.iterParticipants(groupEntity)) {
-        let profilePhoto = null;
-        let lastSeen = "Unknown";
-
+        let lastSeen = null;
         try {
-          // Profile photo as base64
-          const photo = await client.downloadProfilePhoto(user, { file: "blob" });
-          if (photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
-        } catch(e){ profilePhoto = null; }
+          if(user.status){
+            if(user.status.constructor.name === "UserStatusOnline") lastSeen = Date.now();
+            else if(user.status.constructor.name === "UserStatusOffline") lastSeen = user.status.was_online * 1000;
+          }
+        } catch(e){ lastSeen = null; }
 
-        // Last seen / online
-        if(user.status){
-          if(user.status._ == "UserStatusOnline") lastSeen = "online";
-          else if(user.status._ == "UserStatusOffline") 
-            lastSeen = new Date(user.status.was_online*1000).toLocaleString();
-        }
+        let profilePhoto = null;
+        try {
+          if(user.photo){
+            profilePhoto = await client.downloadProfilePhoto(user, {download: false}); // get URL
+          }
+        } catch(e){ profilePhoto = null; }
 
         await push(ref(db, `exported_members/${userKey}`), {
           id: user.id.toString(),
@@ -74,14 +71,13 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
           lastName: user.lastName || null,
           profilePhoto,
           lastSeen,
-          groupLink: req.groupLink,
           createdAt: Date.now()
         });
       }
 
-      await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
+      await update(ref(db, `export_requests/${reqKey}`), { status: "done" });
       console.log(`✅ Exported members for ${req.groupLink}`);
-      break; // stop after first working account
+      break; // Stop after first working account
     } catch (err) {
       console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
       await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
@@ -89,8 +85,4 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   }
 });
 
-// ===== Express Server =====
-const webApp = express();
-const PORT = process.env.PORT || 3000;
-webApp.get("/", (req, res) => res.send("Telegram Node.js Worker Live"));
-webApp.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+console.log("Telegram Worker running...");
