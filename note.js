@@ -1,4 +1,3 @@
-// note.js
 import 'dotenv/config';
 import express from "express";
 import { initializeApp } from "firebase/app";
@@ -16,16 +15,18 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Export Requests Listener =====
+// ===== Export Requests Listener (Safe) =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
+
   if (!req || !req.groupLink || !req.createdBy) return;
+  if (req.status && req.status !== "pending") return; // only pending requests
 
   const userKey = req.createdBy;
   console.log(`Processing export request by ${userKey}: ${req.groupLink}`);
 
-  // Load all accounts and filter by user
+  // Load accounts for this user
   const accountsSnap = await get(ref(db, "telegram_accounts"));
   const allAccounts = accountsSnap.val() || {};
   const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
@@ -49,36 +50,27 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
       const groupEntity = await client.getEntity(req.groupLink);
 
-      // ===== Chunked export to avoid WRITE_TOO_BIG =====
-      const CHUNK_SIZE = 50;
-      let batch = [];
+      // Export members safely
       for await (const user of client.iterParticipants(groupEntity)) {
+        let profilePhoto = null;
+        try {
+          const photo = await client.downloadProfilePhoto(user, { file: "blob" });
+          if (photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
+        } catch(e){ profilePhoto = null; }
 
-        // Build member object
-        const member = {
+        await push(ref(db, `exported_members/${userKey}`), {
           id: user.id.toString(),
           username: user.username || null,
-          first_name: user.firstName || null,
-          last_name: user.lastName || null,
-          profilePhoto: user.photo ? `https://t.me/i/userpic/${user.id}_50.jpg` : null,
-          lastSeen: user.status ? (user.status.wasOnline || null) : null,
+          firstName: user.firstName || null,
+          lastName: user.lastName || null,
+          profilePhoto,
+          groupLink: req.groupLink, // add groupLink for history page
           createdAt: Date.now()
-        };
-
-        batch.push(member);
-
-        // Push batch when full
-        if (batch.length >= CHUNK_SIZE) {
-          await push(ref(db, `exported_members/${userKey}`), batch);
-          batch = [];
-        }
+        });
       }
 
-      // Push remaining members
-      if (batch.length) await push(ref(db, `exported_members/${userKey}`), batch);
-
-      // Update request status
-      await update(ref(db, `export_requests/${reqKey}`), { status: "done" });
+      // Mark request as done
+      await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
       console.log(`✅ Exported members for ${req.groupLink}`);
       break; // stop after first working account
 
@@ -92,5 +84,5 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 // ===== Express Server to keep worker alive =====
 const webApp = express();
 const PORT = process.env.PORT || 3000;
-webApp.get("/", (req, res) => res.send("Telegram Node.js Worker Live"));
+webApp.get("/", (req, res) => res.send("Telegram Node.js Worker PRO+++ Live"));
 webApp.listen(PORT, () => console.log(`Server running on port ${PORT}`));
