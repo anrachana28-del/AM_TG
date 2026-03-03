@@ -5,7 +5,6 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, push, update, onChildAdded } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import { downloadProfilePhoto } from "telegram/utils"; // optional
 
 // ===== Firebase config =====
 const firebaseConfig = {
@@ -57,9 +56,13 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
       const groupEntity = await client.getEntity(req.groupLink);
       let count = 0;
 
+      // Fetch participants
       for await (const user of client.iterParticipants(groupEntity)) {
         try {
-          const profilePhotoUrl = user.photo ? await downloadProfilePhoto(client, user) : null;
+          // ✅ v2+ compatible: profilePhoto URL
+          const profilePhotoUrl = user.photo ? user.photo.photoSmall || null : null;
+
+          // lastSeen: class name (UserStatusOnline, UserStatusOffline...)
           const lastSeenStatus = user.status ? user.status.constructor.name : null;
 
           await push(ref(db, `exported_members/${userKey}`), {
@@ -74,7 +77,6 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
           });
 
           count++;
-          // Update progress every 50 users
           if (count % 50 === 0) {
             await update(ref(db, `export_requests/${reqKey}`), { totalExported: count });
           }
