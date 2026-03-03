@@ -1,88 +1,177 @@
 import 'dotenv/config';
+import express from "express";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, push, update, onChildAdded } from "firebase/database";
+import { 
+  getDatabase, 
+  ref, 
+  get, 
+  push, 
+  update, 
+  query, 
+  orderByChild, 
+  equalTo 
+} from "firebase/database";
+
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
+import { Api } from "telegram";
 
-// ===== Firebase config =====
+// ===== Firebase Config =====
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
   databaseURL: process.env.FIREBASE_DB_URL,
   projectId: process.env.FIREBASE_PROJECT_ID,
 };
+
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Export Requests Listener =====
-onChildAdded(ref(db, "export_requests"), async (snapshot) => {
-  const reqKey = snapshot.key;
-  const req = snapshot.val();
-  if (!req || !req.groupLink || !req.createdBy) return;
+// ===== MAIN EXPORT CHECKER (NO AUTO EXPORT) =====
+let isRunning = false;
 
-  const userKey = req.createdBy;
-  if(req.status !== "pending") return; // Only start if pending
-  console.log(`Processing export request by ${userKey}: ${req.groupLink}`);
+async function checkPendingExports() {
 
-  const accountsSnap = await get(ref(db, "telegram_accounts"));
-  const allAccounts = accountsSnap.val() || {};
-  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
+  if (isRunning) return;
+  isRunning = true;
 
-  if (!accountsList.length) {
-    console.log(`❌ No accounts found for user ${userKey}`);
-    await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: "No accounts" });
-    return;
+  try {
+
+    const q = query(
+      ref(db, "export_requests"),
+      orderByChild("status"),
+      equalTo("pending")
+    );
+
+    const snap = await get(q);
+
+    if (!snap.exists()) {
+      isRunning = false;
+      return;
+    }
+
+    for (const [reqKey, req] of Object.entries(snap.val())) {
+
+      console.log("🚀 Processing:", req.groupLink);
+
+      await update(ref(db, `export_requests/${reqKey}`), {
+        status: "processing",
+        startedAt: Date.now()
+      });
+
+      await runExport(req, reqKey);
+    }
+
+  } catch (err) {
+    console.error("Export Check Error:", err.message);
   }
 
-  for (const acc of accountsList) {
-    try {
-      const client = new TelegramClient(
-        new StringSession(acc.session),
-        parseInt(acc.api_id),
-        acc.api_hash,
-        { connectionRetries: 5 }
-      );
-      await client.start({ phoneNumber: null, password: null });
-      console.log(`Logged in with API_ID ${acc.api_id}`);
+  isRunning = false;
+}
 
-      const groupEntity = await client.getEntity(req.groupLink);
+// Check every 5 seconds
+setInterval(checkPendingExports, 5000);
 
-      // Fetch participants
-      for await (const user of client.iterParticipants(groupEntity)) {
-        let lastSeen = null;
-        try {
-          if(user.status){
-            if(user.status.constructor.name === "UserStatusOnline") lastSeen = Date.now();
-            else if(user.status.constructor.name === "UserStatusOffline") lastSeen = user.status.was_online * 1000;
-          }
-        } catch(e){ lastSeen = null; }
+// ===== EXPORT FUNCTION =====
+async function runExport(req, reqKey) {
 
-        let profilePhoto = null;
-        try {
-          if(user.photo){
-            profilePhoto = await client.downloadProfilePhoto(user, {download: false}); // get URL
-          }
-        } catch(e){ profilePhoto = null; }
+  try {
 
-        await push(ref(db, `exported_members/${userKey}`), {
-          id: user.id.toString(),
-          username: user.username || null,
-          firstName: user.firstName || null,
-          lastName: user.lastName || null,
-          profilePhoto,
-          lastSeen,
-          createdAt: Date.now()
-        });
+    const accountsSnap = await get(ref(db, "telegram_accounts"));
+    const allAccounts = accountsSnap.val() || {};
+
+    const accountsList = Object.values(allAccounts)
+      .filter(acc => acc.createdBy === req.createdBy);
+
+    if (!accountsList.length)
+      throw new Error("No Telegram accounts found");
+
+    const acc = accountsList[0];
+
+    const client = new TelegramClient(
+      new StringSession(acc.session),
+      parseInt(acc.api_id),
+      acc.api_hash,
+      { connectionRetries: 5 }
+    );
+
+    await client.connect();
+    console.log("✅ Logged in:", acc.api_id);
+
+    const group = await client.getEntity(req.groupLink);
+
+    let count = 0;
+
+    for await (const user of client.iterParticipants(group)) {
+
+      // ===== LAST SEEN =====
+      let lastSeen = null;
+
+      if (user.status instanceof Api.UserStatusOnline) {
+        lastSeen = Date.now();
+      }
+      else if (user.status instanceof Api.UserStatusOffline) {
+        lastSeen = user.status.wasOnline * 1000;
       }
 
-      await update(ref(db, `export_requests/${reqKey}`), { status: "done" });
-      console.log(`✅ Exported members for ${req.groupLink}`);
-      break; // Stop after first working account
-    } catch (err) {
-      console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
-      await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
-    }
-  }
-});
+      // ===== PROFILE PHOTO =====
+      let profilePhoto = null;
 
-console.log("Telegram Worker running...");
+      try {
+        const photoBuffer = await client.downloadProfilePhoto(user, {
+          file: "buffer"
+        });
+
+        if (photoBuffer) {
+          profilePhoto =
+            `data:image/jpeg;base64,${photoBuffer.toString("base64")}`;
+        }
+      } catch {}
+
+      // ===== SAVE MEMBER =====
+      await push(ref(db, `exported_members/${req.createdBy}`), {
+        id: user.id.toString(),
+        username: user.username || null,
+        firstName: user.firstName || null,
+        lastName: user.lastName || null,
+        lastSeen,
+        profilePhoto,
+        groupLink: req.groupLink,
+        createdAt: Date.now()
+      });
+
+      count++;
+    }
+
+    await client.disconnect();
+
+    await update(ref(db, `export_requests/${reqKey}`), {
+      status: "done",
+      membersCount: count,
+      finishedAt: Date.now()
+    });
+
+    console.log("🎉 Export Done:", count);
+
+  } catch (err) {
+
+    await update(ref(db, `export_requests/${reqKey}`), {
+      status: "error",
+      error: err.message
+    });
+
+    console.error("❌ Export Failed:", err.message);
+  }
+}
+
+// ===== Express Keep Alive =====
+const webApp = express();
+const PORT = process.env.PORT || 3000;
+
+webApp.get("/", (req, res) =>
+  res.send("🔥 Telegram Worker PRO+++ Running")
+);
+
+webApp.listen(PORT, () =>
+  console.log(`Server running on port ${PORT}`)
+);
