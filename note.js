@@ -26,7 +26,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   console.log(`🚀 Processing export request by ${userKey}: ${req.groupLink}`);
 
   // Mark as processing
-  await update(ref(db, `export_requests/${reqKey}`), { status: "processing" });
+  await update(ref(db, `export_requests/${reqKey}`), { status: "processing", totalExported: 0 });
 
   // Load accounts
   const accountsSnap = await get(ref(db, "telegram_accounts"));
@@ -56,14 +56,10 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
       const groupEntity = await client.getEntity(req.groupLink);
       let count = 0;
 
-      // Fetch participants
       for await (const user of client.iterParticipants(groupEntity)) {
         try {
-          // ✅ v2+ compatible: profilePhoto URL
-          const profilePhotoUrl = user.photo ? user.photo.photoSmall || null : null;
-
-          // lastSeen: class name (UserStatusOnline, UserStatusOffline...)
-          const lastSeenStatus = user.status ? user.status.constructor.name : null;
+          const profilePhotoUrl = user.photo?.photoSmall || null;
+          const lastSeenStatus = user.status?.constructor?.name || null;
 
           await push(ref(db, `exported_members/${userKey}`), {
             id: user.id.toString(),
@@ -80,6 +76,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
           if (count % 50 === 0) {
             await update(ref(db, `export_requests/${reqKey}`), { totalExported: count });
           }
+
         } catch (errUser) {
           console.log(`⚠️ Failed to push user ${user.id}: ${errUser.message}`);
         }
@@ -90,6 +87,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
         totalExported: count,
         finishedAt: Date.now()
       });
+
       console.log(`✅ Done exporting ${count} members for ${req.groupLink}`);
       success = true;
       break; // stop after first successful account
