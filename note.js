@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from "express";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, push, update, onChildAdded, remove } from "firebase/database";
+import { getDatabase, ref, get, push, update, onChildAdded, remove, onValue } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 
@@ -15,11 +15,21 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Export Requests Listener (Safe) =====
+// ===== Track paused users =====
+const pausedUsers = {}; // { username: true/false }
+
+// ===== Listen to Stop/Resume =====
+onValue(ref(db, "export_status"), snapshot => {
+  const statusData = snapshot.val() || {};
+  for (const user in statusData) {
+    pausedUsers[user] = statusData[user].paused || false;
+  }
+});
+
+// ===== Export Requests Listener (Safe + Stop/Resume) =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
-
   if (!req || !req.groupLink || !req.createdBy) return;
   if (req.status && req.status !== "pending") return; // only pending requests
 
@@ -50,28 +60,49 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
       const groupEntity = await client.getEntity(req.groupLink);
 
+      // Update total members in status
+      const totalMembers = (await client.getFullChat(groupEntity)).full_chat.participants_count || 0;
+      await update(ref(db, `export_status/${userKey}`), { status: "running", total: totalMembers, paused: false });
+
       // Export members safely
       for await (const user of client.iterParticipants(groupEntity)) {
+
+        // Check paused before pushing
+        if (pausedUsers[userKey]) {
+          console.log(`⏸ Export paused for ${userKey}, stopping push to exported_members`);
+          // Update request status in Firebase as pending + paused
+          await update(ref(db, `export_requests/${reqKey}`), { status: "pending", paused: true, updatedAt: Date.now() });
+          await update(ref(db, `export_status/${userKey}`), { paused: true, updatedAt: Date.now() });
+          break; // stop iterating until resumed
+        }
+
         let profilePhoto = null;
         try {
           const photo = await client.downloadProfilePhoto(user, { file: "blob" });
           if (photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
         } catch(e){ profilePhoto = null; }
 
+        // Push to exported_members only if not paused
         await push(ref(db, `exported_members/${userKey}`), {
           id: user.id.toString(),
           username: user.username || null,
           firstName: user.firstName || null,
           lastName: user.lastName || null,
           profilePhoto,
-          groupLink: req.groupLink, // add groupLink for history page
+          groupLink: req.groupLink,
           createdAt: Date.now()
         });
       }
 
-      // Mark request as done
-      await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
-      console.log(`✅ Exported members for ${req.groupLink}`);
+      // Check final paused state before marking done
+      if (!pausedUsers[userKey]) {
+        await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
+        await update(ref(db, `export_status/${userKey}`), { status: "done", paused: false, updatedAt: Date.now() });
+        console.log(`✅ Exported members for ${req.groupLink}`);
+      } else {
+        console.log(`⏸ Export paused, request remains pending: ${req.groupLink}`);
+      }
+
       break; // stop after first working account
 
     } catch (err) {
@@ -84,5 +115,5 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 // ===== Express Server to keep worker alive =====
 const webApp = express();
 const PORT = process.env.PORT || 3000;
-webApp.get("/", (req, res) => res.send("Telegram Node.jsា Worker PRO+++ Live"));
+webApp.get("/", (req, res) => res.send("Telegram Node.js Worker PRO+++ Live"));
 webApp.listen(PORT, () => console.log(`Server running on port ${PORT}`));
