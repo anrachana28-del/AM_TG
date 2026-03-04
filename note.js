@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from "express";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, push, update, onChildAdded, onValue } from "firebase/database";
+import { getDatabase, ref, get, push, update, onChildAdded, remove } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 
@@ -15,100 +15,77 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Export Requests Listener (Safe + Pause/Resume) =====
+// ===== Export Requests Listener (Safe) =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
 
-  if (!req || !req.groupLink || !req.createdBy) return;
-  if (req.status && req.status !== "pending") return; // only pending requests
+  if(!req || !req.groupLink || !req.createdBy) return;
+  if(req.status !== "pending") return; // only pending
 
   const userKey = req.createdBy;
   console.log(`Processing export request by ${userKey}: ${req.groupLink}`);
 
-  // Load accounts for this user
+  // Load accounts
   const accountsSnap = await get(ref(db, "telegram_accounts"));
   const allAccounts = accountsSnap.val() || {};
   const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
-
-  if (!accountsList.length) {
-    console.log(`❌ No accounts found for user ${userKey}`);
-    await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: "No accounts" });
+  if(!accountsList.length){
+    await update(ref(db, `export_requests/${reqKey}`), { status:"error", error:"No accounts" });
     return;
   }
 
-  // Initialize pause status
-  const statusRef = ref(db, `export_status/${userKey}`);
-  let paused = false;
-  onValue(statusRef, snap => {
-    const data = snap.val();
-    paused = data?.paused || false;
-  });
+  for(const acc of accountsList){
+    try{
+      const client = new TelegramClient(
+        new StringSession(acc.session),
+        parseInt(acc.api_id),
+        acc.api_hash,
+        { connectionRetries:5 }
+      );
+      await client.start({ phoneNumber:null, password:null });
+      console.log(`Logged in with API_ID ${acc.api_id}`);
 
-  try {
-    // Set export status running
-    await update(statusRef, { status: "running", paused: false, updatedAt: Date.now() });
+      const groupEntity = await client.getEntity(req.groupLink);
 
-    for (const acc of accountsList) {
-      try {
-        const client = new TelegramClient(
-          new StringSession(acc.session),
-          parseInt(acc.api_id),
-          acc.api_hash,
-          { connectionRetries: 5 }
-        );
-        await client.start({ phoneNumber: null, password: null });
-        console.log(`Logged in with API_ID ${acc.api_id}`);
-
-        const groupEntity = await client.getEntity(req.groupLink);
-
-        // Export members safely
-        for await (const user of client.iterParticipants(groupEntity)) {
-          // ===== Check Pause =====
-          while(paused) {
-            console.log(`⏸ Export paused for ${userKey}...`);
-            await new Promise(r => setTimeout(r, 1000));
-          }
-
-          let profilePhoto = null;
-          try {
-            const photo = await client.downloadProfilePhoto(user, { file: "blob" });
-            if (photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
-          } catch(e){ profilePhoto = null; }
-
-          await push(ref(db, `exported_members/${userKey}`), {
-            id: user.id.toString(),
-            username: user.username || null,
-            firstName: user.firstName || null,
-            lastName: user.lastName || null,
-            profilePhoto,
-            groupLink: req.groupLink,
-            createdAt: Date.now()
-          });
+      for await(const user of client.iterParticipants(groupEntity)){
+        // Check if request was cancelled
+        const reqSnap = await get(ref(db, `export_requests/${reqKey}`));
+        if(reqSnap.val()?.status !== "pending") {
+          console.log("Export cancelled, stopping...");
+          return;
         }
 
-        // Mark request as done
-        await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
-        await update(statusRef, { status: "done", updatedAt: Date.now() });
-        console.log(`✅ Exported members for ${req.groupLink}`);
-        break; // stop after first working account
+        let profilePhoto = null;
+        try{
+          const photo = await client.downloadProfilePhoto(user, { file:"blob" });
+          if(photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
+        } catch(e){ profilePhoto=null; }
 
-      } catch (err) {
-        console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
-        await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
-        await update(statusRef, { status: "error", updatedAt: Date.now() });
+        await push(ref(db, `exported_members/${userKey}`), {
+          id:user.id.toString(),
+          username:user.username||null,
+          firstName:user.firstName||null,
+          lastName:user.lastName||null,
+          profilePhoto,
+          groupLink:req.groupLink,
+          createdAt:Date.now()
+        });
       }
-    }
 
-  } catch(err) {
-    console.error(`❌ Unexpected error: ${err.message}`);
-    await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
-    await update(statusRef, { status: "error", updatedAt: Date.now() });
+      await update(ref(db, `export_requests/${reqKey}`), { status:"done", processedAt:Date.now() });
+      console.log(`✅ Exported members for ${req.groupLink}`);
+      break;
+
+    } catch(err){
+      console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
+      await update(ref(db, `export_requests/${reqKey}`), { status:"error", error:err.message });
+    }
   }
 });
 
-// ===== Express Server to keep worker alive =====
+// ===== Express Server =====
 const webApp = express();
 const PORT = process.env.PORT || 3000;
-webApp.get("/", (req, res) => res.send("Telegram Node.js Worker PRO+++ Live"));
-webApp.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+webApp.get("/", (req,res)=>res.send("Telegram Node.js Worker PRO+++ Live"));
+webApp.listen(PORT, ()=>console.log(`Server running on port ${PORT}`));
