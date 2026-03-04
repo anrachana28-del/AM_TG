@@ -15,21 +15,11 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Track paused users =====
-const pausedUsers = {}; // { username: true/false }
-
-// ===== Listen for Stop/Resume signals from frontend =====
-onValue(ref(db, "export_status"), snapshot => {
-  const statusData = snapshot.val() || {};
-  for (const user in statusData) {
-    pausedUsers[user] = statusData[user].paused || false;
-  }
-});
-
-// ===== Export Requests Listener (Safe + Stop/Resume) =====
+// ===== Export Requests Listener (Safe + Pause/Resume) =====
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
+
   if (!req || !req.groupLink || !req.createdBy) return;
   if (req.status && req.status !== "pending") return; // only pending requests
 
@@ -47,66 +37,73 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
     return;
   }
 
-  for (const acc of accountsList) {
-    try {
-      const client = new TelegramClient(
-        new StringSession(acc.session),
-        parseInt(acc.api_id),
-        acc.api_hash,
-        { connectionRetries: 5 }
-      );
-      await client.start({ phoneNumber: null, password: null });
-      console.log(`Logged in with API_ID ${acc.api_id}`);
+  // Initialize pause status
+  const statusRef = ref(db, `export_status/${userKey}`);
+  let paused = false;
+  onValue(statusRef, snap => {
+    const data = snap.val();
+    paused = data?.paused || false;
+  });
 
-      const groupEntity = await client.getEntity(req.groupLink);
+  try {
+    // Set export status running
+    await update(statusRef, { status: "running", paused: false, updatedAt: Date.now() });
 
-      // Update total members in status
-      const totalMembers = (await client.getFullChat(groupEntity)).full_chat.participants_count || 0;
-      await update(ref(db, `export_status/${userKey}`), { status: "running", total: totalMembers, paused: false });
+    for (const acc of accountsList) {
+      try {
+        const client = new TelegramClient(
+          new StringSession(acc.session),
+          parseInt(acc.api_id),
+          acc.api_hash,
+          { connectionRetries: 5 }
+        );
+        await client.start({ phoneNumber: null, password: null });
+        console.log(`Logged in with API_ID ${acc.api_id}`);
 
-      // Export members safely
-      for await (const user of client.iterParticipants(groupEntity)) {
+        const groupEntity = await client.getEntity(req.groupLink);
 
-        // Stop pushing if paused
-        if (pausedUsers[userKey]) {
-          console.log(`⏸ Export paused for ${userKey}, stopping push to exported_members`);
-          await update(ref(db, `export_requests/${reqKey}`), { status: "pending", paused: true, updatedAt: Date.now() });
-          await update(ref(db, `export_status/${userKey}`), { paused: true, updatedAt: Date.now() });
-          break;
+        // Export members safely
+        for await (const user of client.iterParticipants(groupEntity)) {
+          // ===== Check Pause =====
+          while(paused) {
+            console.log(`⏸ Export paused for ${userKey}...`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
+
+          let profilePhoto = null;
+          try {
+            const photo = await client.downloadProfilePhoto(user, { file: "blob" });
+            if (photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
+          } catch(e){ profilePhoto = null; }
+
+          await push(ref(db, `exported_members/${userKey}`), {
+            id: user.id.toString(),
+            username: user.username || null,
+            firstName: user.firstName || null,
+            lastName: user.lastName || null,
+            profilePhoto,
+            groupLink: req.groupLink,
+            createdAt: Date.now()
+          });
         }
 
-        let profilePhoto = null;
-        try {
-          const photo = await client.downloadProfilePhoto(user, { file: "blob" });
-          if (photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
-        } catch(e){ profilePhoto = null; }
-
-        await push(ref(db, `exported_members/${userKey}`), {
-          id: user.id.toString(),
-          username: user.username || null,
-          firstName: user.firstName || null,
-          lastName: user.lastName || null,
-          profilePhoto,
-          groupLink: req.groupLink,
-          createdAt: Date.now()
-        });
-      }
-
-      // Only mark done if not paused
-      if (!pausedUsers[userKey]) {
+        // Mark request as done
         await update(ref(db, `export_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
-        await update(ref(db, `export_status/${userKey}`), { status: "done", paused: false, updatedAt: Date.now() });
+        await update(statusRef, { status: "done", updatedAt: Date.now() });
         console.log(`✅ Exported members for ${req.groupLink}`);
-      } else {
-        console.log(`⏸ Export paused, request remains pending: ${req.groupLink}`);
+        break; // stop after first working account
+
+      } catch (err) {
+        console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
+        await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
+        await update(statusRef, { status: "error", updatedAt: Date.now() });
       }
-
-      break; // stop after first working account
-
-    } catch (err) {
-      console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
-      await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
     }
+
+  } catch(err) {
+    console.error(`❌ Unexpected error: ${err.message}`);
+    await update(ref(db, `export_requests/${reqKey}`), { status: "error", error: err.message });
+    await update(statusRef, { status: "error", updatedAt: Date.now() });
   }
 });
 
