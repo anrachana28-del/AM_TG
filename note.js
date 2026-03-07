@@ -15,123 +15,71 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Export Requests Listener =====
-onChildAdded(ref(db, "export_requests"), async (snapshot) => {
-  const reqKey = snapshot.key;
-  const req = snapshot.val();
-  if(!req || !req.groupLink || !req.createdBy) return;
-  if(req.status !== "pending") return;
-
-  const userKey = req.createdBy;
-  console.log(`Processing export request by ${userKey}: ${req.groupLink}`);
-
-  // Load user's accounts
-  const accountsSnap = await get(ref(db, "telegram_accounts"));
-  const allAccounts = accountsSnap.val() || {};
-  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
-  if(!accountsList.length){
-    await update(ref(db, `export_requests/${reqKey}`), { status:"error", error:"No accounts" });
-    return;
-  }
-
-  for(const acc of accountsList){
-    try{
-      const client = new TelegramClient(
-        new StringSession(acc.session),
-        parseInt(acc.api_id),
-        acc.api_hash,
-        { connectionRetries:5 }
-      );
-      await client.start({ phoneNumber:null, password:null });
-      console.log(`Logged in with API_ID ${acc.api_id}`);
-
-      const groupEntity = await client.getEntity(req.groupLink);
-
-      for await(const user of client.iterParticipants(groupEntity)){
-        const reqSnap = await get(ref(db, `export_requests/${reqKey}`));
-        if(reqSnap.val()?.status !== "pending") {
-          console.log("Export cancelled, stopping...");
-          return;
-        }
-
-        let profilePhoto = null;
-        try{
-          const photo = await client.downloadProfilePhoto(user, { file:"blob" });
-          if(photo) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photo).toString("base64")}`;
-        } catch(e){ profilePhoto=null; }
-
-        await push(ref(db, `exported_members/${userKey}`), {
-          id:user.id.toString(),
-          username:user.username||null,
-          firstName:user.firstName||null,
-          lastName:user.lastName||null,
-          profilePhoto,
-          groupLink:req.groupLink,
-          createdAt:Date.now()
-        });
-      }
-
-      await update(ref(db, `export_requests/${reqKey}`), { status:"done", processedAt:Date.now() });
-      console.log(`✅ Exported members for ${req.groupLink}`);
-      break;
-
-    } catch(err){
-      console.error(`❌ Failed with account ${acc.api_id}: ${err.message}`);
-      await update(ref(db, `export_requests/${reqKey}`), { status:"error", error:err.message });
-    }
-  }
-});
-
-// ===== Add Members Listener =====
+// ===== Add Members Listener (Safe, 30s delay per member) =====
 onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
-  if(!req || req.status!=="pending") return;
+  if (!req || req.status !== "pending") return;
 
-  const targetGroupLink = req.targetGroup;
-  const membersToAdd = req.members || [];
-  const userKey = req.createdBy;
+  const members = req.members || [];
+  if (!members.length) {
+    await update(ref(db, `add_members_requests/${reqKey}`), { status: "error", error: "No members" });
+    return;
+  }
 
-  // Load user's accounts
+  // Load user accounts
   const accountsSnap = await get(ref(db, "telegram_accounts"));
   const allAccounts = accountsSnap.val() || {};
-  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
-  if(!accountsList.length){
-    await update(ref(db, `add_members_requests/${reqKey}`), { status:"error", error:"No accounts" });
+  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === req.createdBy);
+  if (!accountsList.length) {
+    await update(ref(db, `add_members_requests/${reqKey}`), { status: "error", error: "No accounts" });
     return;
   }
 
   let accountIndex = 0;
-  for(const member of membersToAdd){
-    const acc = accountsList[accountIndex % accountsList.length]; // rotate accounts
-    accountIndex++;
 
-    try{
+  for (const member of members) {
+    try {
+      const acc = accountsList[accountIndex % accountsList.length]; // rotate accounts
+      accountIndex++;
+
       const client = new TelegramClient(
         new StringSession(acc.session),
         parseInt(acc.api_id),
         acc.api_hash,
-        { connectionRetries:5 }
+        { connectionRetries: 5 }
       );
-      await client.start({ phoneNumber:null, password:null });
-      const targetEntity = await client.getEntity(targetGroupLink);
+      await client.start({ phoneNumber: null, password: null });
 
-      if(member.username){
-        await client.addUser(targetEntity, member.username);
-      } else if(member.id && member.accessHash){
-        await client.addUser(targetEntity, { userId:member.id, accessHash:member.accessHash });
-      }
+      const targetEntity = await client.getEntity(req.targetGroup);
+      const userEntity = await client.getEntity(member.username || member.id);
 
-      console.log(`Added ${member.username || member.id} to ${targetGroupLink}`);
-      await new Promise(r => setTimeout(r, 5000)); // delay
+      await client.addUserToChannel(targetEntity, userEntity);
+      console.log(`✅ Added @${member.username} using account ${acc.api_id}`);
 
-    } catch(err){
-      console.error(`❌ Failed to add ${member.username || member.id}: ${err.message}`);
+      // Update Firebase logs
+      await push(ref(db, `add_members_requests/${reqKey}/logs`), {
+        member: member.username,
+        status: "added",
+        timestamp: Date.now()
+      });
+
+      // Delay 30 seconds before next member
+      await new Promise(resolve => setTimeout(resolve, 30 * 1000));
+
+    } catch (err) {
+      console.error(`❌ Failed to add ${member.username}: ${err.message}`);
+      await push(ref(db, `add_members_requests/${reqKey}/logs`), {
+        member: member.username,
+        status: "error",
+        error: err.message,
+        timestamp: Date.now()
+      });
     }
   }
 
-  await update(ref(db, `add_members_requests/${reqKey}`), { status:"done", processedAt:Date.now() });
-  console.log(`✅ Finished adding members to ${targetGroupLink}`);
+  await update(ref(db, `add_members_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
+  console.log(`✅ Finished adding members for request ${reqKey}`);
 });
 
 // ===== Express Server =====
