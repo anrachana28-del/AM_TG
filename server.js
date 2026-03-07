@@ -1,52 +1,98 @@
-import 'dotenv/config';
-import express from "express";
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, push } from "firebase/database";
+import 'dotenv/config'
+import express from "express"
+import { initializeApp } from "firebase/app"
+import { getDatabase, ref, set, push } from "firebase/database"
 
+// ===== Firebase config =====
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
   databaseURL: process.env.FIREBASE_DB_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-};
+  projectId: process.env.FIREBASE_PROJECT_ID
+}
 
-const appFirebase = initializeApp(firebaseConfig);
-const db = getDatabase(appFirebase);
-const app = express();
-app.use(express.json());
+const firebaseApp = initializeApp(firebaseConfig)
+const db = getDatabase(firebaseApp)
 
-app.post("/add-request-auto", async (req,res) => {
-  const { username, targetGroup, maxCount } = req.body;
-  if(!username || !targetGroup) return res.status(400).json({ error:"Missing username or targetGroup" });
+// ===== Express =====
+const app = express()
+const PORT = process.env.PORT || 3000
 
-  try{
-    const membersSnap = await ref(db, `exported_members/${username}`);
-    const snapshot = await new Promise((resolve,reject)=>{
-      onValue(ref(db, `exported_members/${username}`), snap=>resolve(snap), err=>reject(err));
-    });
+app.use(express.json())
 
-    if(!snapshot.exists()) return res.json({ status:"empty", message:"No members to add" });
+// =============================
+// CREATE ADD REQUEST
+// =============================
+app.post("/add-request", async (req, res) => {
 
-    const members = Object.values(snapshot.val()).filter(m=>m.username);
-    const toAdd = maxCount ? members.slice(0, maxCount) : members;
+  const { username, targetGroup, members } = req.body
 
-    for(const member of toAdd){
-      const addRef = ref(db, `export_requests/${Date.now()}_${member.username}`);
-      await set(addRef, {
-        createdBy: username,
-        targetGroup,
-        memberUsername: member.username,
-        status: "pending",
-        createdAt: Date.now()
-      });
+  if (!username || !targetGroup || !members || !Array.isArray(members)) {
+    return res.status(400).json({
+      status: "error",
+      error: "Missing username, targetGroup or members[]"
+    })
+  }
+
+  try {
+
+    const requestKey = push(ref(db, "add_requests")).key
+
+    await set(ref(db, `add_requests/${requestKey}`), {
+      createdBy: username,
+      targetGroup: targetGroup,
+      totalMembers: members.length,
+      status: "pending",
+      createdAt: Date.now()
+    })
+
+    // save members inside request
+    for (const m of members) {
+
+      const memberKey = push(ref(db, `add_requests/${requestKey}/members`)).key
+
+      await set(ref(db, `add_requests/${requestKey}/members/${memberKey}`), {
+        username: m.username || null,
+        user_id: m.user_id || null,
+        access_hash: m.access_hash || null,
+        status: "pending"
+      })
+
     }
 
-    res.json({ status:"success", added: toAdd.length });
+    return res.json({
+      status: "success",
+      requestId: requestKey,
+      message: `Add request created (${members.length} members)`
+    })
 
-  } catch(err){
-    console.error(err);
-    res.status(500).json({ error: err.message });
+  } catch (err) {
+
+    console.error("Add request error:", err)
+
+    return res.status(500).json({
+      status: "error",
+      error: err.message
+    })
+
   }
-});
 
-app.listen(3000, ()=>console.log("Server running on 3000"));
+})
+
+
+// =============================
+// SERVER STATUS
+// =============================
+app.get("/", (req, res) => {
+
+  res.send("🚀 Telegram Add Members Server PRO++ Running")
+
+})
+
+
+// =============================
+app.listen(PORT, () => {
+
+  console.log(`🚀 Server running on port ${PORT}`)
+
+})
