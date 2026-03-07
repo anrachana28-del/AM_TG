@@ -1,4 +1,3 @@
-// server.js
 import 'dotenv/config';
 import express from "express";
 import { initializeApp } from "firebase/app";
@@ -16,71 +15,70 @@ const firebaseConfig = {
 const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
-// ===== Telegram Add-Member Worker =====
-console.log("🔹 Telegram Add-Member Worker Started");
-
-onChildAdded(ref(db,"add_requests"), async snap=>{
+// ===== Telegram Add Member Worker =====
+onChildAdded(ref(db, "add_requests"), async (snap) => {
   const req = snap.val();
-  if(!req || req.status !== "pending") return;
+  if (!req || req.status !== "pending") return;
   const { groupLink, createdBy, members } = req;
-  console.log(`Processing add request for group ${groupLink} by ${createdBy}`);
 
-  try {
-    // Load user accounts
-    const accountsSnap = await get(ref(db,"telegram_accounts"));
-    const accounts = Object.values(accountsSnap.val()||{}).filter(a => a.createdBy === createdBy && a.session);
-    if(!accounts.length){
-      await update(ref(db, `add_requests/${snap.key}`), {status:"error", error:"No accounts"});
-      console.log("❌ No accounts available for user", createdBy);
-      return;
-    }
+  // Load accounts for this user
+  const accountsSnap = await get(ref(db, "telegram_accounts"));
+  const accounts = Object.values(accountsSnap.val() || {}).filter(a => a.createdBy === createdBy && a.session);
+  if (!accounts.length) {
+    await update(ref(db, `add_requests/${snap.key}`), { status: "error", error: "No accounts available" });
+    return;
+  }
 
-    // Use first available account
-    const acc = accounts[0];
-    const client = new TelegramClient(
-      new StringSession(acc.session),
-      parseInt(acc.api_id),
-      acc.api_hash,
-      { connectionRetries:5 }
-    );
-    await client.start({ phoneNumber:null, password:null });
-    console.log(`✅ Logged in with API_ID ${acc.api_id}`);
+  for (const acc of accounts) {
+    try {
+      const client = new TelegramClient(
+        new StringSession(acc.session),
+        parseInt(acc.api_id),
+        acc.api_hash,
+        { connectionRetries: 5 }
+      );
+      await client.start({ phoneNumber: null, password: null });
+      console.log(`Logged in with API_ID ${acc.api_id}`);
 
-    // Get Telegram group
-    const group = await client.getEntity(groupLink);
+      const groupEntity = await client.getEntity(groupLink);
 
-    // Add members
-    for(const m of members){
-      try {
-        await client.addUserToChannel(group, m.id);
-        await push(ref(db, `added_members/${createdBy}`), {
-          ...m,
-          groupLink,
-          createdAt: Date.now()
-        });
-        console.log(`Added ${m.username||m.id} to ${groupLink}`);
-      } catch(e){
-        console.error(`Failed to add ${m.username||m.id}: ${e.message}`);
+      for (const m of members) {
+        try {
+          await client.addUserToChannel(groupEntity, m.id);
+          // Log added member to Firebase
+          await push(ref(db, `added_members/${createdBy}`), {
+            ...m,
+            groupLink,
+            addedBy: acc.api_id,
+            createdAt: Date.now()
+          });
+          console.log(`✅ Added ${m.username || m.id} to ${groupLink}`);
+        } catch (e) {
+          console.error(`❌ Failed to add ${m.username || m.id}: ${e.message}`);
+        }
       }
-    }
 
-    // Mark request done
-    await update(ref(db, `add_requests/${snap.key}`), {status:"done", processedAt:Date.now()});
-    console.log(`✅ Finished adding members to ${groupLink}`);
-  } catch(e){
-    console.error("Error processing request:", e.message);
-    await update(ref(db, `add_requests/${snap.key}`), {status:"error", error:e.message});
+      await update(ref(db, `add_requests/${snap.key}`), { status: "done", processedAt: Date.now() });
+      console.log(`✅ Completed request for ${groupLink}`);
+      break; // stop after first working account
+    } catch (err) {
+      console.error(`❌ Account ${acc.api_id} failed: ${err.message}`);
+      continue; // try next account if fails
+    }
   }
 });
 
-// ===== Small Express Server for Render =====
+// ===== Express Server for Monitoring =====
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (req,res)=>{
-  res.send("Telegram Worker Running ✅");
+// Basic status endpoint
+app.get("/", (req, res) => {
+  res.send(`<h1>Telegram Add-Member Worker</h1>
+    <p>Status: Running ✅</p>
+    <p>Check Firebase for live logs and processed requests.</p>`);
 });
 
-app.listen(PORT, ()=>{
-  console.log(`Server listening on port ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`🌐 Express server running on port ${PORT}`);
 });
