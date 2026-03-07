@@ -1,10 +1,8 @@
 import 'dotenv/config';
-import express from "express";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, push, update, onChildAdded } from "firebase/database";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import { Api } from "telegram";
 
 // ===== Firebase config =====
 const firebaseConfig = {
@@ -17,79 +15,77 @@ const appFirebase = initializeApp(firebaseConfig);
 const db = getDatabase(appFirebase);
 
 // ===== Add Members Listener =====
-onChildAdded(ref(db, "add_requests"), async (snapshot) => {
+onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
   const reqKey = snapshot.key;
   const req = snapshot.val();
-  if(!req || !req.targetGroup || !req.createdBy || !req.members?.length) return;
-  if(req.status !== "pending") return;
+  if (!req || req.status !== "pending") return;
 
-  const userKey = req.createdBy;
-  console.log(`Processing Add Members request by ${userKey} → ${req.targetGroup}`);
-
-  // Load accounts
-  const accountsSnap = await get(ref(db, "telegram_accounts"));
-  const allAccounts = accountsSnap.val() || {};
-  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === userKey);
-  if(!accountsList.length){
-    await update(ref(db, `add_requests/${reqKey}`), { status:"error", error:"No accounts" });
+  const members = req.members || [];
+  if (!members.length) {
+    await update(ref(db, `add_members_requests/${reqKey}`), { status: "error", error: "No members provided" });
     return;
   }
 
-  // Loop through members
-  let memberIndex = 0;
-  for(const member of req.members){
-    const acc = accountsList[memberIndex % accountsList.length]; // rotate accounts
+  // Load accounts for the user
+  const accountsSnap = await get(ref(db, "telegram_accounts"));
+  const allAccounts = accountsSnap.val() || {};
+  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === req.createdBy);
+  if (!accountsList.length) {
+    await update(ref(db, `add_members_requests/${reqKey}`), { status: "error", error: "No Telegram accounts available" });
+    return;
+  }
 
-    try{
+  let accountIndex = 0;
+
+  for (const member of members) {
+    try {
+      const acc = accountsList[accountIndex % accountsList.length]; // rotate accounts
+      accountIndex++;
+
       const client = new TelegramClient(
         new StringSession(acc.session),
         parseInt(acc.api_id),
         acc.api_hash,
-        { connectionRetries:5 }
+        { connectionRetries: 5 }
       );
-      await client.start({ phoneNumber:null, password:null });
-      console.log(`Logged in with API_ID ${acc.api_id}`);
+      await client.start({ phoneNumber: null, password: null });
 
       const targetEntity = await client.getEntity(req.targetGroup);
-      const userEntity = await client.getEntity(member.username || member.id);
+      const userEntity = await client.getEntity(member); // username or user_id
 
-      await client.invoke(new Api.channels.InviteToChannel({
-        channel: targetEntity,
-        users: [userEntity]
-      }));
+      // ⚡ Use appropriate method for channels/supergroups
+      if (typeof client.addChatUser === "function") {
+        await client.addChatUser(targetEntity, userEntity, 0); // for basic chats
+      } else if (typeof client.addUserToChannel === "function") {
+        await client.addUserToChannel(targetEntity, userEntity); // supergroup/channel
+      } else {
+        throw new Error("No valid method to add member found in TelegramClient");
+      }
 
-      console.log(`✅ Added @${member.username} to ${req.targetGroup}`);
-      await push(ref(db, `add_logs/${userKey}`), {
-        member: member.username || member.id,
-        status: "success",
+      console.log(`✅ Added ${member} using account ${acc.api_id}`);
+
+      // Log to Firebase
+      await push(ref(db, `add_members_requests/${reqKey}/logs`), {
+        member,
+        status: "added",
         timestamp: Date.now(),
         accountUsed: acc.api_id
       });
 
-      // Wait 30s before next member
-      await new Promise(res => setTimeout(res, 30*1000));
+      // 30 seconds delay
+      await new Promise(resolve => setTimeout(resolve, 30 * 1000));
 
-    } catch(err){
-      console.error(`❌ Failed to add ${member.username}: ${err.message}`);
-      await push(ref(db, `add_logs/${userKey}`), {
-        member: member.username || member.id,
+    } catch (err) {
+      console.error(`❌ Failed to add ${member}: ${err.message}`);
+      await push(ref(db, `add_members_requests/${reqKey}/logs`), {
+        member,
         status: "error",
         error: err.message,
-        timestamp: Date.now(),
-        accountUsed: acc.api_id
+        timestamp: Date.now()
       });
     }
-
-    memberIndex++;
   }
 
-  // Mark request done
-  await update(ref(db, `add_requests/${reqKey}`), { status:"done", processedAt:Date.now() });
-  console.log(`✅ Finished Add Members request for ${req.targetGroup}`);
+  await update(ref(db, `add_members_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
+  console.log(`✅ Finished Add Members request ${reqKey}`);
 });
-
-// ===== Express Server =====
-const webApp = express();
-const PORT = process.env.PORT || 3000;
-webApp.get("/", (req,res)=>res.send("Telegram Node.js Worker PRO+++ Live"));
-webApp.listen(PORT, ()=>console.log(`Server running on port ${PORT}`));
