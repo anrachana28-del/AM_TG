@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Telegram Add Members Tool PRO++</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet">
+
+<style>
+body{
+  font-family:'JetBrains Mono',monospace;
+  background:#121213;
+  color:#fff;
+  margin:0;
+  padding:0;
+}
+.container{
+  max-width:900px;
+  margin:auto;
+  padding:20px;
+}
+section{
+  background:#1f2937;
+  border-radius:16px;
+  padding:20px;
+  margin-bottom:20px;
+  box-shadow:0 8px 20px rgba(0,0,0,0.5);
+}
+.card-title{
+  font-size:20px;
+  font-weight:700;
+  margin-bottom:15px;
+  color:#22c55e;
+}
+input{
+  width:100%;
+  padding:12px;
+  margin-top:6px;
+  border-radius:12px;
+  border:none;
+  background:#111827;
+  color:#fff;
+  font-size:16px;
+}
+button{
+  border:none;
+  padding:10px;
+  border-radius:8px;
+  cursor:pointer;
+  font-size:15px;
+}
+#startAdd{background:#22c55e;color:white;margin-top:10px;}
+#cancelAdd{background:#c67474;color:white;margin-top:8px;}
+.memberRow{padding:6px;border-bottom:1px solid rgba(255,255,255,0.1);}
+.stats{margin-top:10px;font-size:14px;color:#38bdf8;}
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);justify-content:center;align-items:center;}
+.modal-content{background:#1f2937;padding:20px;border-radius:12px;width:90%;max-width:600px;}
+table{width:100%;border-collapse:collapse;margin-top:10px;}
+th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.1);}
+.selected-row{background:#2563eb;}
+</style>
+</head>
+<body>
+
+<div class="container">
+<section>
+<div class="card-title">Add Members to My Group</div>
+
+<p id="user-info"></p>
+
+<div>
+<b id="accountTotal">Accounts: 0</b> |
+Members Exported: <b id="memberTotal" style="color:#22c55e">0</b>
+</div>
+
+<div style="margin-top:12px">
+<label>Number of Members to Add</label>
+<input type="number" id="memberCount" placeholder="Enter amount">
+</div>
+
+<button id="openModal">Select / Create Group</button>
+<div style="margin-top:10px">
+Selected Group: <span id="selectedGroup" style="color:#22c55e">None</span>
+</div>
+
+<button id="startAdd">Start Adding Members</button>
+<button id="cancelAdd">Cancel</button>
+
+<div class="stats" id="progress">Waiting...</div>
+<div id="addedMembers"></div>
+</section>
+</div>
+
+<!-- GROUP MODAL -->
+<div class="modal" id="groupModal">
+<div class="modal-content">
+<h3>Select Group</h3>
+<table id="groupTable">
+<thead>
+<tr><th>#</th><th>Group Link</th><th>Delete</th></tr>
+</thead>
+<tbody></tbody>
+</table>
+
+<input id="newGroupInput" placeholder="https://t.me/groupname">
+<button id="confirmGroup">Confirm</button>
+</div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, get, push, set, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey:"AIzaSyCpmV3xv-HIxWDm8vgNoNtLHAUpyBcFHTI",
+  authDomain:"tool-74d29.firebaseapp.com",
+  databaseURL:"https://tool-74d29-default-rtdb.firebaseio.com",
+  projectId:"tool-74d29"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const username = localStorage.getItem("telegram_user");
+if(!username){ alert("Login first"); location.href="login.html"; }
+
+document.getElementById("user-info").textContent="Logged in as: "+username;
+
+let exportedMembers=[], accounts=[], selectedGroup=null, adding=false;
+const progress=document.getElementById("progress");
+const addedMembersDiv=document.getElementById("addedMembers");
+
+// Load exported members
+async function loadMembers(){
+  const snap = await get(ref(db,"exported_members/"+username));
+  exportedMembers = snap.exists() ? Object.values(snap.val()) : [];
+  document.getElementById("memberTotal").textContent=exportedMembers.length;
+}
+
+// Load accounts
+async function loadAccounts(){
+  const snap = await get(ref(db,"telegram_accounts"));
+  accounts=[];
+  snap.forEach(child=>{
+    const acc=child.val();
+    if(acc.createdBy===username) accounts.push(acc);
+  });
+  document.getElementById("accountTotal").textContent="Accounts: "+accounts.length;
+}
+
+// Show added members
+function showAdded(name){
+  const div=document.createElement("div");
+  div.className="memberRow";
+  div.textContent="Queued → @"+name;
+  addedMembersDiv.appendChild(div);
+}
+
+// Start adding members
+async function startAdd(){
+  if(!selectedGroup) return alert("Select group first");
+  if(exportedMembers.length===0) return alert("No members");
+  const count=parseInt(document.getElementById("memberCount").value)||exportedMembers.length;
+  const members=exportedMembers.slice(0,count);
+  adding=true;
+  progress.textContent="Sending request...";
+
+  try{
+    const res=await fetch("http://localhost:3000/add-request",{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ username, targetGroup:selectedGroup, members })
+    });
+    const data=await res.json();
+    if(data.status==="success"){
+      progress.textContent="Request sent → "+members.length+" members";
+      members.forEach(m=>showAdded(m.username||m.user_id));
+    }else{
+      progress.textContent="Error: "+data.error;
+    }
+  }catch(e){
+    progress.textContent="Server error";
+  }
+}
+
+document.getElementById("startAdd").onclick=startAdd;
+document.getElementById("cancelAdd").onclick=()=>{ adding=false; progress.textContent="Canceled"; };
+
+// Group modal
+const modal=document.getElementById("groupModal");
+document.getElementById("openModal").onclick=()=>{ modal.style.display="flex"; loadGroups(); };
+
+async function loadGroups(){
+  const body=document.querySelector("#groupTable tbody");
+  body.innerHTML="";
+  const resp = await fetch(`http://localhost:3000/fetch-groups/${username}`);
+  const data = await resp.json();
+  let i = 1;
+  data.groups.forEach(g => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${i++}</td><td>${g.link}</td><td><button class="del">Delete</button></td>`;
+    body.appendChild(tr);
+
+    tr.onclick = () => { selectedGroup = g.link; document.getElementById("selectedGroup").textContent = g.link; };
+    tr.querySelector(".del").onclick = async (e) => {
+      e.stopPropagation();
+      await fetch(`http://localhost:3000/delete-group/${username}/${g.key}`, { method:"DELETE" });
+      loadGroups();
+    };
+  });
+}
+
+// Confirm new group
+document.getElementById("confirmGroup").onclick = async () => {
+  const newLink=document.getElementById("newGroupInput").value.trim();
+  if(newLink){
+    const key=push(ref(db,"user_groups/"+username)).key;
+    await set(ref(db,"user_groups/"+username+"/"+key),{link:newLink});
+    selectedGroup=newLink;
+  }
+  modal.style.display="none";
+  document.getElementById("selectedGroup").textContent=selectedGroup;
+};
+
+loadMembers();
+loadAccounts();
+</script>
+</body>
+</html>
