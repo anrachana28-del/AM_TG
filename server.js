@@ -1,98 +1,81 @@
-import 'dotenv/config'
-import express from "express"
-import { initializeApp } from "firebase/app"
-import { getDatabase, ref, set, push } from "firebase/database"
+import 'dotenv/config';
+import express from "express";
+import cors from "cors";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, onChildAdded, set, get, push, remove } from "firebase/database";
 
 // ===== Firebase config =====
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
   databaseURL: process.env.FIREBASE_DB_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID
-}
+  projectId: process.env.FIREBASE_PROJECT_ID,
+};
 
-const firebaseApp = initializeApp(firebaseConfig)
-const db = getDatabase(firebaseApp)
+const appFirebase = initializeApp(firebaseConfig);
+const db = getDatabase(appFirebase);
 
-// ===== Express =====
-const app = express()
-const PORT = process.env.PORT || 3000
+// ===== Express server =====
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-app.use(express.json())
+app.use(cors({ origin: "*" })); // allow all origins (adjust for production)
+app.use(express.json());
 
-// =============================
-// CREATE ADD REQUEST
-// =============================
+// ===== API: Create add-request =====
 app.post("/add-request", async (req, res) => {
-
-  const { username, targetGroup, members } = req.body
-
-  if (!username || !targetGroup || !members || !Array.isArray(members)) {
-    return res.status(400).json({
-      status: "error",
-      error: "Missing username, targetGroup or members[]"
-    })
-  }
+  const { username, targetGroup, members } = req.body;
+  if (!username || !targetGroup || !members || !members.length)
+    return res.status(400).json({ error: "Missing username, targetGroup or members" });
 
   try {
+    const addRef = ref(db, "add_requests");
+    for (const member of members) {
+      const key = push(addRef).key;
+      await set(ref(db, `add_requests/${key}`), {
+        createdBy: username,
+        targetGroup,
+        memberUsername: member.username || member.user_id,
+        status: "pending",
+        createdAt: Date.now()
+      });
 
-    const requestKey = push(ref(db, "add_requests")).key
-
-    await set(ref(db, `add_requests/${requestKey}`), {
-      createdBy: username,
-      targetGroup: targetGroup,
-      totalMembers: members.length,
-      status: "pending",
-      createdAt: Date.now()
-    })
-
-    // save members inside request
-    for (const m of members) {
-
-      const memberKey = push(ref(db, `add_requests/${requestKey}/members`)).key
-
-      await set(ref(db, `add_requests/${requestKey}/members/${memberKey}`), {
-        username: m.username || null,
-        user_id: m.user_id || null,
-        access_hash: m.access_hash || null,
-        status: "pending"
-      })
-
+      // Optional: Remove from exported_members once added to request queue
+      const memSnap = await get(ref(db, `exported_members/${username}`));
+      if (memSnap.exists()) {
+        memSnap.forEach(child => {
+          const val = child.val();
+          if ((val.username && val.username === member.username) || val.user_id === member.user_id) {
+            remove(ref(db, `exported_members/${username}/${child.key}`));
+          }
+        });
+      }
     }
 
-    return res.json({
-      status: "success",
-      requestId: requestKey,
-      message: `Add request created (${members.length} members)`
-    })
-
+    res.json({ status: "success", message: `${members.length} members added to request queue` });
   } catch (err) {
-
-    console.error("Add request error:", err)
-
-    return res.status(500).json({
-      status: "error",
-      error: err.message
-    })
-
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
+});
 
-})
+// ===== API: list app members =====
+app.get("/app-members/:username", async (req, res) => {
+  const username = req.params.username;
+  if (!username) return res.status(400).json({ error: "Missing username" });
 
+  try {
+    const memSnap = await get(ref(db, `app_members/${username}`));
+    const members = memSnap.exists() ? Object.values(memSnap.val()) : [];
+    res.json({ status: "success", members });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-// =============================
-// SERVER STATUS
-// =============================
+// ===== Root =====
 app.get("/", (req, res) => {
+  res.send("Telegram Add Members Server PRO+++ Live");
+});
 
-  res.send("🚀 Telegram Add Members Server PRO++ Running")
-
-})
-
-
-// =============================
-app.listen(PORT, () => {
-
-  console.log(`🚀 Server running on port ${PORT}`)
-
-})
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
