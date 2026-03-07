@@ -1,12 +1,8 @@
-import express from "express";
-import cors from "cors";
-import bodyParser from "body-parser";
+import 'dotenv/config';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, push, set, remove } from "firebase/database";
-
-const app = express();
-app.use(cors());
-app.use(bodyParser.json());
+import { getDatabase, ref, get, push, update, onChildAdded } from "firebase/database";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions/index.js";
 
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
@@ -14,72 +10,38 @@ const firebaseConfig = {
   databaseURL: process.env.FIREBASE_DB_URL,
   projectId: process.env.FIREBASE_PROJECT_ID
 };
+const appFirebase = initializeApp(firebaseConfig);
+const db = getDatabase(appFirebase);
 
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getDatabase(firebaseApp);
+onChildAdded(ref(db,"add_requests"), async snap=>{
+  const req = snap.val();
+  if(!req || req.status!=="pending") return;
+  const { groupLink, createdBy, members } = req;
 
-// Get exported members
-app.get("/fetch-members/:username", async (req, res) => {
-  const username = req.params.username;
-  try {
-    const snap = await get(ref(db, `exported_members/${username}`));
-    const members = snap.exists() ? Object.values(snap.val()) : [];
-    res.json({ members });
-  } catch (err) {
-    res.json({ members: [], error: err.message });
+  const accountsSnap = await get(ref(db,"telegram_accounts"));
+  const accounts = Object.values(accountsSnap.val()||{}).filter(a=>a.createdBy===createdBy && a.session);
+  if(!accounts.length){
+    await update(ref(db, `add_requests/${snap.key}`), {status:"error", error:"No accounts"});
+    return;
   }
-});
 
-// Get user groups
-app.get("/fetch-groups/:username", async (req, res) => {
-  const username = req.params.username;
-  try {
-    const snap = await get(ref(db, `user_groups/${username}`));
-    const groups = [];
-    if (snap.exists()) {
-      snap.forEach(child => {
-        groups.push({ key: child.key, link: child.val().link });
+  const acc = accounts[0]; // use first account
+  const client = new TelegramClient(new StringSession(acc.session), parseInt(acc.api_id), acc.api_hash, {connectionRetries:5});
+  await client.start({phoneNumber:null,password:null});
+
+  const group = await client.getEntity(groupLink);
+
+  for(const m of members){
+    try{
+      await client.addUserToChannel(group, m.id);
+      await push(ref(db, `added_members/${createdBy}`), {
+        ...m,
+        groupLink,
+        createdAt:Date.now()
       });
-    }
-    res.json({ groups });
-  } catch (err) {
-    res.json({ groups: [], error: err.message });
+    }catch(e){ console.error("Failed to add:", m.username, e.message);}
   }
+
+  await update(ref(db, `add_requests/${snap.key}`), {status:"done", processedAt:Date.now()});
+  console.log(`✅ Added all members to ${groupLink}`);
 });
-
-// Add members to selected group
-app.post("/add-request", async (req, res) => {
-  const { username, targetGroup, members } = req.body;
-  if (!username || !targetGroup || !members) return res.json({ status:"error", error:"Missing parameters" });
-
-  try {
-    const addRef = ref(db, `add_member/${username}`);
-    for (const m of members) {
-      const key = push(addRef).key;
-      await set(ref(db, `add_member/${username}/${key}`), {
-        user_id: m.user_id || null,
-        username: m.username || null,
-        firstName: m.firstName || null,
-        group: targetGroup,
-        createdAt: Date.now()
-      });
-    }
-    res.json({ status:"success", message:`${members.length} members added` });
-  } catch (err) {
-    res.json({ status:"error", error: err.message });
-  }
-});
-
-// Delete group
-app.delete("/delete-group/:username/:key", async (req, res) => {
-  const { username, key } = req.params;
-  try {
-    await remove(ref(db, `user_groups/${username}/${key}`));
-    res.json({ status:"success" });
-  } catch (err) {
-    res.json({ status:"error", error: err.message });
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, ()=>console.log(`Server running at http://localhost:${PORT}`));
