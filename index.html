@@ -1,116 +1,568 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>Telegram Export Tool</title>
+<meta charset="UTF-8">
+<title>Telegram Export Tool PRO+++ Mobile Safe</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet">
 <style>
-body { font-family: Arial; background:#0f172a; color:#fff; padding:20px }
-input, textarea, button { width:100%; margin:6px 0; padding:8px }
-button { background:#22c55e; border:none; cursor:pointer }
-pre { background:#020617; padding:10px; height:220px; overflow:auto }
-hr { margin:20px 0 }
+body {font-family:'JetBrains Mono',monospace;background:#121213;color:#fff;margin:0;padding:0;}
+.container{max-width:900px;margin:auto;padding:20px;}
+section{background:#1f2937;border-radius:16px;padding:20px;margin-bottom:20px;box-shadow:0 8px 20px rgba(0,0,0,0.5);}
+.card-title{font-size:20px;font-weight:700;margin-bottom:15px;color:#22c55e;}
+input{width:100%;padding:12px;margin-top:12px;border-radius:12px;border:none;background:#111827;color:#fff;font-size:16px;box-sizing:border-box;}
+button{border:none;padding:10px;border-radius:8px;cursor:pointer;font-size:15px;transition:all .2s ease;box-sizing:border-box;}
+button:active{transform:scale(.96);}
+.btn-group{display:flex;gap:8px;margin-top:20px;flex-wrap:wrap;}
+.btn-group button{flex:1;min-width:100px;}
+.nav-btn{background:#ffffffeb;color:black;}
+.nav-btn:hover{background:#717875;}
+#logoutBtn{background:#c67474;}
+#logoutBtn:hover{background:#dc2626;}
+#uploadBtn,#exportBtn{background:#22c55e;color:#fff;}
+#deleteProcessingBtn{background:#fff7f7;color: rgb(249, 5, 5);}
+#deleteProcessingBtn:hover{background:#ed0909; color: white;}
+#downloadBtn,#downloadHistoryBtn{margin-top:12px;width:100%;color:#000;}
+ul{list-style:none;padding:0;margin-top:10px;word-break:break-word;}
+li{padding:6px;border-bottom:1px solid rgba(255,255,255,0.05);border-radius:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.username-highlight{display:inline-block;padding:2px 6px;border-radius:4px;background: linear-gradient(90deg,#63e209,#0ea5e9);animation: glow 1.5s ease-in-out infinite alternate;}
+.avatar{width:30px;height:30px;border-radius:50%;object-fit:cover;border:1px solid #fff;}
+@keyframes glow{0%{background-position:0%;}50%{background-position:100%;}100%{background-position:0%;}}
+.stats{margin-top:10px;font-size:14px;color:#38bdf8;}
+.table-responsive{width:100%;overflow-x:auto;}
+table{width:100%;border-collapse:collapse;}
+th,td{padding:8px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.1);}
+th{background:#374151;color:#fff;}
+#memberList{max-height:50vh;overflow-y:auto;padding-right:4px;}
+@media(max-width:600px){
+  .container{padding:15px;}
+  .btn-group button{flex:1 1 45%;font-size:14px;padding:10px;}
+  input{font-size:14px;padding:10px;}
+  table, th, td{font-size:12px;}
+  ul#memberList{max-height:40vh;}
+  .username-highlight{padding:1px 4px;font-size:12px;}
+  .avatar{width:24px;height:24px;}
+}
 </style>
 </head>
 <body>
+<div class="container">
 
-<h2>Upload Telegram Account (.env / .txt)</h2>
-<input type="file" id="file" accept=".env,.txt">
-<button onclick="uploadFile()">Upload File</button>
+<!-- Upload Page -->
+<section id="uploadPage">
+  <div class="card-title">Upload Telegram Accounts</div>
+  <p id="user-info"></p>
+  <button id="logoutBtn">Logout</button>
+  <input type="file" id="file" accept=".env,.txt">
+  <button id="uploadBtn">Upload File</button>
+  <div style="margin-top:15px; display:flex; gap:8px; flex-wrap:wrap;">
+    <button class="nav-btn" data-page="exportPage">Export Members PRO+++ CMD + Full Profile</button>
+   
+  </div>
+  <div class="btn-group">
+    <button id="selectAllBtn">Select All</button>
+    <button id="deselectAllBtn">Deselect All</button>
+  </div>
+  <h4>Uploaded Accounts</h4>
+  <div class="table-responsive">
+    <table id="accountList">
+      <thead><tr><th>Select</th><th>#</th><th>API_ID</th><th>Created At</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
 
-<hr>
+<section id="exportPage" style="display:none;">
+  <div class="card-title">Export Members PRO+++ CMD + Full Profile</div>
 
-<h2>Export Members</h2>
-<input id="group" placeholder="https://t.me/groupname">
-<button onclick="exportMembers()">Export</button>
+  <!-- Navigation -->
+  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+    <button class="nav-btn" data-page="uploadPage" style="flex:1; padding:12px 0; border-radius:12px; background:#3b82f6; color:#fff; font-weight:600;">Upload Accounts</button>
+    <button class="nav-btn" data-page="historyPage" style="flex:1; padding:12px 0; border-radius:12px; background:rgba(73,67,67,0.176); color:#f0f5f0; font-weight:600;">View History</button>
+  </div>
 
-<h3>Exported @username</h3>
-<pre id="output">No data</pre>
+  <!-- Group input -->
+  <div style="margin-bottom:16px; display:flex; flex-direction:column; gap:6px;">
+    <label for="group" style="font-size:14px; font-weight:600; color:#38bdf8;">Telegram Group Link</label>
+  <textarea id="group" placeholder="https://t.me/groupname"
+          style="
+            padding:12px 5px;
+            font-size:16px;
+            border-radius:12px;
+            border:1px solid #374151;
+            background:#6161636f;
+            color:#fff;
+            outline:none;
+            transition:all 0.2s ease;
+            resize: vertical;      /* <-- only vertical */
+            min-height:40px;
+            max-height:200px;
+            width:100%;            /* keep full width */
+          "
+          onfocus="this.style.border='1px solid #22c55e';"
+          onblur="this.style.border='1px solid #374151';"
+></textarea>
+  </div>
+
+  <!-- Export Button -->
+  <div class="btn-group" style="margin-bottom:12px; display:flex; gap:12px;">
+    <button id="exportBtn" style="
+        flex:1;
+        padding:14px 0;
+        font-size:16px;
+        font-weight:600;
+        border-radius:14px;
+        border:none;
+        background:linear-gradient(90deg,#026a28,#acb2b45c);
+        color:#fff;
+        box-shadow:0 4px 12px rgba(4, 155, 175, 0.3);
+        cursor:pointer;
+        transition:all 0.2s ease;
+      ">Export</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats" id="stats" style="margin-bottom:12px; font-size:14px; color:#38bdf8;">Members: 0 | Speed: 0/sec | ETA: --</div>
+
+  <!-- Download / Delete Buttons -->
+  <div class="btn-group" style="margin-bottom:12px; display:flex; gap:12px;">
+    <button id="downloadBtn" style="
+        flex:1;
+        padding:12px 0;
+        font-size:12px;
+        font-weight:600;
+        border-radius:14px;
+        border:none;
+        background:linear-gradient(90deg,#3b83f611,#40404341);
+        color:#fff;
+        box-shadow:0 4px 12px rgba(1, 78, 119, 0.581);
+        cursor:pointer;
+        transition:all 0.2s ease;
+      ">Download</button>
+
+    <button id="deleteProcessingBtn" disabled style="
+        flex:1;
+        padding:12px 0;
+        font-size:12px;
+        font-weight:100;
+        border-radius:14px;
+        border:none;
+        background:linear-gradient(90deg,#3b83f611,#40404341);
+        color:#fff;
+        box-shadow:0 4px 12px rgba(193, 4, 4, 0.717);
+        cursor:not-allowed;
+        transition:all 0.2s ease;
+      ">Delete</button>
+  </div>
+
+<!-- Member list -->
+<ul id="memberList" style="max-height:50vh; overflow-y:auto; padding-right:4px; list-style:none; margin:0; gap:6px;"></ul>
+
+<!-- Go To Add Page Button -->
+<button id="goAddPageBtn" style="display:none;">Go To Add Page</button>
+
+<div id="memberMessage" style="color:#38bdf8; margin-top:6px; font-size:14px;">
+  Waiting for members<span id="dots"></span>
+</div>
+</section>
+
+<!-- History Page -->
+<section id="historyPage" style="display:none;">
+  <div class="card-title">Export Requests History</div>
+  <button class="nav-btn" data-page="exportPage">Back to Upload</button>
+  <div style="margin:10px 0; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+    <div id="historyCount" style="font-weight:bold;">Total: 0</div>
+    <button id="downloadHistoryBtn" style="background:#22c55e;color:#fff;padding:6px 12px;border-radius:6px;">Download CSV</button>
+  </div>
+  <input id="searchHistory" placeholder="Search Group Link..." style="width:100%;padding:10px;margin-top:12px;border-radius:8px;border:none;background:#111827;color:#fff;">
+  <div class="table-responsive">
+    <table id="historyTable">
+      <thead>
+        <tr><th>#</th><th>Group Link</th><th>Created At</th><th>Status</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+</div>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getDatabase, ref, push, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+import { getDatabase, ref, push, onChildAdded, onValue, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-/* Firebase config */
+// Firebase Config
 const firebaseConfig = {
-  apiKey: "AIzaSyAuPx4zukNE-TnBClJbTocOwem0twM1KU0",
-  authDomain: "tool-add.firebaseapp.com",
-  databaseURL: "https://tool-add-default-rtdb.firebaseio.com",
-  projectId: "tool-add"
+  apiKey: "AIzaSyCpmV3xv-HIxWDm8vgNoNtLHAUpyBcFHTI",
+  authDomain: "tool-74d29.firebaseapp.com",
+  databaseURL: "https://tool-74d29-default-rtdb.firebaseio.com",
+  projectId: "tool-74d29"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+// Strict login check
+const username = localStorage.getItem("telegram_user"); // ❌ no fallback
+if (!username) {
+  alert("Please login first!");
+  window.location.href = "login.html"; // បញ្ជូនទៅ login page
+  throw new Error("User not logged in"); // stop script execution
+}
+document.getElementById("user-info").textContent = "Logged in as: " + username;
 
-/* Upload file and parse accounts */
-window.uploadFile = async () => {
-  const file = document.getElementById("file").files[0];
-  if (!file) {
-    alert("Please select a file");
-    return;
-  }
 
-  const text = await file.text();
-  const lines = text.split(/\r?\n/);
 
-  const map = {};
-  for (const line of lines) {
-    if (!line.includes("=")) continue;
-    const [k, v] = line.split("=");
-    map[k.trim()] = v?.trim();
-  }
 
-  let count = 0;
-  for (const key in map) {
-    if (key.startsWith("API_ID_")) {
-      const idx = key.split("_")[2];
-      const api_id = map[`API_ID_${idx}`];
-      const api_hash = map[`API_HASH_${idx}`];
-      const session = map[`SESSION_${idx}`];
 
-      if (api_id && api_hash && session) {
-        await push(ref(db, "telegram_accounts"), {
-          api_id,
-          api_hash,
-          session,
-          createdAt: Date.now()
-        });
-        count++;
-      }
-    }
-  }
 
-  alert(`Uploaded ${count} Telegram account(s) ✅`);
+// Logout Button
+document.getElementById("logoutBtn").onclick = () => {
+  if(!confirm("Are you sure you want to logout?")) return;
+
+  // Clear user data
+  localStorage.removeItem("telegram_user");
+
+  // Optional: clear members list
+  memberList = [];
+  memberListEl.innerHTML = "";
+
+  // Redirect or reload
+  window.location.href = "login.html"; // or location.reload();
 };
 
-/* Send export request */
-window.exportMembers = async () => {
-  const link = document.getElementById("group").value.trim();
-  if (!link) {
-    alert("Missing group link");
-    return;
-  }
 
-  await push(ref(db, "export_requests"), {
-    groupLink: link,
-    status: "pending",
-    createdAt: Date.now()
-  });
 
-  alert("Export started 🚀");
-};
 
-/* Show exported members */
-onValue(ref(db, "exported_members"), snap => {
-  const data = snap.val();
-  let text = "";
-  if (data) {
-    Object.values(data).forEach(u => {
-      if (u.username) text += "@" + u.username + "\n";
-    });
-  }
-  document.getElementById("output").textContent = text || "No data";
+// Navigation
+document.querySelectorAll(".nav-btn").forEach(btn=>{
+  btn.onclick = ()=>{ 
+    document.querySelectorAll("section").forEach(p=>p.style.display="none"); 
+    document.getElementById(btn.dataset.page).style.display="block"; 
+  };
 });
-</script>
 
+// Elements
+const accountListEl = document.querySelector("#accountList tbody");
+let accountRows = [];
+const memberListEl = document.getElementById("memberList");
+const exportBtn = document.getElementById("exportBtn");
+const deleteProcessingBtn = document.getElementById("deleteProcessingBtn");
+const downloadBtn = document.getElementById("downloadBtn");
+const statsEl = document.getElementById("stats");
+const groupInput = document.getElementById("group");
+
+let memberList=[], memberCount=0, lastUpdateTime=0, lastCount=0;
+
+// Fetch Accounts
+function fetchAccounts(){
+  onValue(ref(db,"telegram_accounts"),snap=>{
+    accountListEl.innerHTML=""; accountRows=[]; let i=1;
+    snap.forEach(child=>{
+      const acc=child.val();
+      if(acc.createdBy!==username) return;
+      const tr=document.createElement("tr");
+      const chk=document.createElement("input"); chk.type="checkbox"; chk.checked=true;
+      tr.innerHTML=`<td></td><td>${i++}</td><td>${acc.api_id}</td><td>${new Date(acc.createdAt).toLocaleString()}</td>`;
+      tr.children[0].appendChild(chk);
+      accountListEl.appendChild(tr);
+      accountRows.push({key:child.key, checkbox:chk});
+    });
+  },{onlyOnce:true});
+}
+document.getElementById("selectAllBtn").onclick = ()=> accountRows.forEach(r=>r.checkbox.checked=true);
+document.getElementById("deselectAllBtn").onclick = ()=> accountRows.forEach(r=>r.checkbox.checked=false);
+
+// Auto delete members
+async function autoDeleteMembers(){ try{ await remove(ref(db, `exported_members/${username}`)); } catch(e){console.log(e);} }
+
+let dotInterval;
+
+
+
+
+
+
+// Dot jump animation
+function startDotJump() {
+  const dotsEl = document.getElementById("dots");
+  let dotCount = 0;
+  return setInterval(() => {
+    dotCount = (dotCount + 1) % 4; // 0,1,2,3 dots
+    dotsEl.textContent = ".".repeat(dotCount);
+  }, 500);
+}
+
+// Listen members & block button until export done AND memberList not empty
+// Listen members with animated "Waiting..." dots
+function listenMembers() {
+  const memberRef = ref(db, `exported_members/${username}`);
+  const goAddPageBtn = document.getElementById("goAddPageBtn");
+  const memberMsg = document.getElementById("memberMessage");
+
+  // Disable button initially
+  goAddPageBtn.disabled = true;
+  goAddPageBtn.style.opacity = "0.6";
+  goAddPageBtn.style.cursor = "not-allowed";
+
+  let dotCount = 0;
+  const maxDots = 3;
+  const dotInterval = setInterval(() => {
+    if(goAddPageBtn.disabled) {
+      dotCount = (dotCount + 1) % (maxDots + 1);
+      memberMsg.textContent = "Waiting for members" + ".".repeat(dotCount);
+    }
+  }, 500);
+
+  onChildAdded(memberRef, snap => {
+    const data = snap.val(); 
+    if (!data?.username) return;
+
+    memberList.push(data);
+
+    // Add member to UI
+    const date = new Date();
+    const timeStr = `[${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}:${String(date.getSeconds()).padStart(2,'0')}]`;
+    const fullName = data.firstName || data.lastName ? `${data.firstName||""} ${data.lastName||""}`.trim() : '';
+    const avatarUrl = data.profilePhoto || "https://via.placeholder.com/30?text=No";
+
+    const li = document.createElement("li");
+    li.innerHTML = `${timeStr} <img src="${avatarUrl}" class="avatar"><span class="username-highlight">@${data.username}</span>${fullName ? `(${fullName})` : ''}`;
+    memberListEl.appendChild(li);
+    li.scrollIntoView({behavior:"smooth"});
+
+    // Enable button once there is at least 1 member
+    if(memberListEl.children.length > 0){
+      goAddPageBtn.disabled = false;
+      goAddPageBtn.style.opacity = "1";
+      goAddPageBtn.style.cursor = "pointer";
+      memberMsg.textContent = "✅ Members ready! Click 'Go To Add Page'";
+      clearInterval(dotInterval); // stop dots animation
+    }
+  });
+}
+
+// Click to go add page
+document.getElementById("goAddPageBtn").onclick = () => {
+  if(document.getElementById("goAddPageBtn").disabled) return;
+  window.location.href = "add.html";
+};
+
+// Click to go add page
+document.getElementById("goAddPageBtn").onclick = () => {
+  if(document.getElementById("goAddPageBtn").disabled) return;
+  window.location.href = "add.html";
+};
+// Start Export (Multi Group)
+exportBtn.onclick = async () => {
+  const rawInput = groupInput.value.trim();
+  if (!rawInput) return alert("Missing group link");
+
+  const groups = rawInput
+    .split("\n")
+    .map(g => g.trim())
+    .filter(g => g.length > 0);
+
+  if (groups.length === 0) return alert("No valid group");
+
+  exportBtn.disabled = true;
+  deleteProcessingBtn.disabled = true;
+  groupInput.disabled = true;
+
+  memberCount = 0;
+  memberList = [];
+  lastUpdateTime = Date.now();
+  lastCount = 0;
+  memberListEl.innerHTML = "";
+  statsEl.textContent = `Starting ${groups.length} group(s)...`;
+
+  await autoDeleteMembers();
+
+  // Listen members & update live count
+  listenMembers(); 
+
+  try {
+    for (let i = 0; i < groups.length; i++) {
+      const link = groups[i];
+
+      // Update stats with live count
+      const interval = setInterval(()=>{
+        statsEl.textContent = `Processing ${i+1}/${groups.length} → ${link} | Members: ${memberList.length}`;
+      }, 500); // update every 0.5s
+
+      const newReqRef = await push(ref(db,"export_requests"),{
+        groupLink: link,
+        accounts: [],
+        createdBy: username,
+        createdAt: Date.now(),
+        status: "pending"
+      });
+      await waitForCompletion(newReqRef.key);
+
+      clearInterval(interval); // stop updating when this group done
+    }
+
+    statsEl.textContent = `✅ All Done | Total Members: ${memberList.length}`;
+
+    // Enable Delete button
+    deleteProcessingBtn.disabled = false;
+    deleteProcessingBtn.style.cursor = "pointer";
+    deleteProcessingBtn.style.opacity = "1";
+
+    // Show Go To Add Page button
+    const goAddPageBtn = document.getElementById("goAddPageBtn");
+    if(memberList.length > 0){
+      goAddPageBtn.style.display = "block";
+      goAddPageBtn.disabled = false;
+      goAddPageBtn.style.opacity = "1";
+      goAddPageBtn.style.cursor = "pointer";
+    }
+
+  } catch (err) {
+    console.error(err);
+    statsEl.textContent = "❌ Export Error";
+  }
+
+  exportBtn.disabled = false;
+  groupInput.disabled = false;
+};
+
+function waitForCompletion(requestKey){
+  return new Promise((resolve, reject)=>{
+    const reqRef = ref(db, `export_requests/${requestKey}`);
+    const unsubscribe = onValue(reqRef, snap=>{
+      const data = snap.val();
+      if(!data) return;
+      if(data.status === "done"){ unsubscribe(); resolve(); }
+      if(data.status === "error"){ unsubscribe(); reject(data.error || "Unknown error"); }
+    });
+  });
+}
+// Delete Processing
+deleteProcessingBtn.onclick = async () => {
+
+  if (!confirm("Delete all exported members for your account? This cannot be undone.")) return;
+
+  deleteProcessingBtn.disabled = true;
+  statsEl.textContent = "🗑 Deleting...";
+
+  try {
+
+    // Remove from Firebase
+    await remove(ref(db, `exported_members/${username}`));
+
+    // Clear UI
+    memberListEl.innerHTML = "";
+
+    // Reset Variables
+    memberList = [];
+    memberCount = 0;
+    lastCount = 0;
+    lastUpdateTime = Date.now();
+
+    statsEl.textContent = "✅ Deleted Successfully";
+
+    // Small delay before reload (smooth UX)
+    setTimeout(() => {
+      location.reload();   // Browser-style reload
+    }, 1000);
+
+  } catch (e) {
+    console.log("Error deleting exported members:", e);
+    statsEl.textContent = "❌ Delete Failed";
+    deleteProcessingBtn.disabled = false;
+  }
+
+};
+
+// Download CSV
+downloadBtn.onclick = () => {
+  if(memberList.length===0) return alert("No data");
+  const csvLines = memberList.map(m=>{
+    const fullName = m.firstName || m.lastName ? `${m.firstName||""} ${m.lastName||""}`.trim() : '';
+    return [m.username||'', fullName, m.profilePhoto||''].join(',');
+  });
+  const blob = new Blob([csvLines.join("\n")],{type:"text/csv"});
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download="members_profile.csv"; a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ---------------------- History Page ----------------------
+const historyTableBody = document.querySelector("#historyTable tbody");
+const searchHistory = document.getElementById("searchHistory");
+const downloadHistoryBtn = document.getElementById("downloadHistoryBtn");
+let historyData = [];
+
+async function fetchExportHistory() {
+  historyTableBody.innerHTML = "";
+  historyData = [];
+  const historyRef = ref(db, "export_requests");
+
+  onValue(historyRef, snap => {
+    const now = Date.now();
+    snap.forEach(child => {
+      const req = child.val();
+      if (req.createdBy !== username) return;
+      if (now - req.createdAt > 24*60*60*1000) { remove(ref(db, `export_requests/${child.key}`)); return; }
+      historyData.push({...req, key: child.key});
+    });
+
+    renderHistoryTable();
+  }, { onlyOnce:true });
+}
+
+function renderHistoryTable() {
+  historyTableBody.innerHTML = "";
+  const filterText = searchHistory.value.toLowerCase().trim();
+
+  let idx = 1;
+
+  historyData.forEach(req => {
+    if(!req.groupLink.toLowerCase().includes(filterText)) return;
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${idx++}</td>
+      <td>
+        <a href="${req.groupLink}" target="_blank">${req.groupLink}</a>
+        <button style="margin-left:6px;padding:2px 6px;font-size:12px;background:#38bdf8;color:#000;border-radius:4px;cursor:pointer;" 
+            onclick="navigator.clipboard.writeText('${req.groupLink}').then(()=>alert('Copied!'))">Copy</button>
+      </td>
+      <td>${new Date(req.createdAt).toLocaleString()}</td>
+      <td>${req.status}</td>
+    `;
+    historyTableBody.appendChild(tr);
+  });
+}
+
+searchHistory.oninput = renderHistoryTable;
+
+downloadHistoryBtn.onclick = () => {
+  const rows = Array.from(historyTableBody.querySelectorAll("tr"));
+  if(rows.length === 0) return alert("No data");
+
+  const csvLines = rows.map(tr => [
+    tr.children[0].textContent,
+    tr.children[1].querySelector("a")?.textContent || '',
+    tr.children[2].textContent,
+    tr.children[3].textContent
+  ].join(','));
+
+  const blob = new Blob([csvLines.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "export_history.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+// Strict login check
+if (!username) {
+  alert("Please login first!");
+  window.location.href = "login.html"; // បញ្ជូនទៅ login page
+  throw new Error("User not logged in"); // stop script execution
+}
+
+// ប្រសិនបើ login រួច
+document.getElementById("user-info").textContent = "Logged in as: " + username;
+fetchExportHistory();
+fetchAccounts();
+</script>
 </body>
 </html>
