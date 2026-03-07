@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Login - Telegram Export Tool</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+<style>
+body{
+  margin:0;
+  height:100vh;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  background:linear-gradient(135deg,#0f172a,#1e293b);
+  font-family:'JetBrains Mono', monospace;
+  color:#fff;
+}
+
+.login-card{
+  background:#1e293b;
+  padding:35px;
+  border-radius:18px;
+  width:90%;
+  max-width:420px;
+  box-shadow:0 0 30px rgba(0,0,0,0.5);
+  position:relative;
+}
+
+h2{
+  text-align:center;
+  margin-bottom:25px;
+  font-weight:600;
+}
+
+.input-group{
+  position:relative;
+  margin-bottom:18px;
+  width:100%;
+}
+
+input{
+  width:100%;
+  padding:14px 40px 14px 14px; /* right padding for toggle */
+  border-radius:12px;
+  border:1px solid #334155;
+  background:#111827;
+  color:#fff;
+  font-family:inherit;
+  font-size:15px;
+  transition:0.3s;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+  box-sizing:border-box;
+}
+
+input::placeholder{
+  color:#94a3b8;
+}
+
+input:focus{
+  outline:none;
+  border-color:#22c55e;
+  box-shadow:0 0 8px #22c55e55, inset 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.toggle-password{
+  position:absolute;
+  top:50%;
+  right:12px;
+  transform:translateY(-50%);
+  cursor:pointer;
+  color:#94a3b8;
+  font-size:16px;
+  user-select:none;
+}
+
+button{
+  width:100%;
+  padding:14px;
+  border:none;
+  border-radius:12px;
+  background:linear-gradient(90deg,#22c55e,#16a34a);
+  color:#fff;
+  font-weight:bold;
+  cursor:pointer;
+  font-size:16px;
+  transition:.3s;
+  position:relative;
+}
+
+button:hover{transform:scale(1.03);box-shadow:0 0 12px #22c55e66;}
+button:active{transform:scale(.98);}
+button:disabled{opacity:0.6;cursor:not-allowed;}
+
+.loading-spinner{
+  display:none;
+  position:absolute;
+  right:15px;
+  top:50%;
+  transform:translateY(-50%);
+  width:18px;height:18px;
+  border:3px solid #334155;
+  border-top:3px solid #22c55e;
+  border-radius:50%;
+  animation:spin 1s linear infinite;
+}
+
+.footer-text{
+  text-align:center;
+  margin-top:15px;
+  font-size:13px;
+  opacity:.7;
+}
+
+@keyframes spin{
+  0%{transform:rotate(0);}
+  100%{transform:rotate(360deg);}
+}
+
+@media(max-width:480px){
+  .login-card{
+    padding:25px;
+  }
+  input{
+    font-size:14px;
+    padding:12px 36px 12px 12px;
+  }
+  button{
+    font-size:15px;
+    padding:12px;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="login-card">
+<h2>🔐 Telegram Export Tool</h2>
+
+<div class="input-group">
+<input id="username" placeholder="Username">
+</div>
+
+<div class="input-group">
+<input id="password" type="password" placeholder="Password">
+<span class="toggle-password" id="togglePassword">👁</span>
+</div>
+
+<button id="loginBtn">Login
+  <div class="loading-spinner" id="spinner"></div>
+</button>
+
+<div class="footer-text">Secure Access System</div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, get } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCpmV3xv-HIxWDm8vgNoNtLHAUpyBcFHTI",
+  authDomain: "tool-74d29.firebaseapp.com",
+  databaseURL: "https://tool-74d29-default-rtdb.firebaseio.com",
+  projectId: "tool-74d29"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const loginBtn = document.getElementById("loginBtn");
+const spinner = document.getElementById("spinner");
+const togglePassword = document.getElementById("togglePassword");
+const passwordInput = document.getElementById("password");
+const usernameInput = document.getElementById("username");
+
+// 👁 Toggle password
+togglePassword.addEventListener("click", () => {
+  if(passwordInput.type === "password"){
+    passwordInput.type = "text";
+    togglePassword.textContent = "🙈";
+  } else {
+    passwordInput.type = "password";
+    togglePassword.textContent = "👁";
+  }
+});
+
+// 🔄 Login with spinner
+loginBtn.addEventListener("click", async () => {
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value.trim();
+  if(!username || !password) return alert("Please enter username and password");
+
+  spinner.style.display = "block";
+  loginBtn.disabled = true;
+
+  try{
+    const userSnap = await get(ref(db, `users/${username}`));
+    if(!userSnap.exists()) throw new Error("User not found");
+
+    const data = userSnap.val();
+    if(data.password !== password) throw new Error("Wrong password");
+    if(data.role !== "user") throw new Error("Access denied");
+
+    localStorage.setItem("telegram_user", username);
+    localStorage.setItem("telegram_role", data.role);
+
+    window.location.href = "index.html";
+  } catch(err){
+    alert(err.message);
+  } finally{
+    spinner.style.display = "none";
+    loginBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>
