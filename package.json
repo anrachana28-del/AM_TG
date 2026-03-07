@@ -2,14 +2,15 @@
   "name": "telegram-live-worker",
   "version": "1.0.0",
   "type": "module",
-  "main": "note.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node note.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "firebase": "^10.3.0",
+    "firebase": "^10.7.1",
     "telegram": "^2.0.0",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
   }
 }
