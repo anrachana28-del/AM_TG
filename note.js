@@ -1,46 +1,54 @@
 import 'dotenv/config';
+import express from "express";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, push, update, onChildAdded } from "firebase/database";
-import { TelegramClient } from "telegram";
+import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 
-// ===== Firebase config =====
+// ===== Firebase Config =====
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
   databaseURL: process.env.FIREBASE_DB_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID,
+  projectId: process.env.FIREBASE_PROJECT_ID
 };
-const appFirebase = initializeApp(firebaseConfig);
-const db = getDatabase(appFirebase);
 
-// ===== Add Members Listener =====
-onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getDatabase(firebaseApp);
+
+// ===== Delay Helper =====
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* =====================================================
+   EXPORT MEMBERS WORKER
+===================================================== */
+
+onChildAdded(ref(db, "export_requests"), async (snapshot) => {
+
   const reqKey = snapshot.key;
   const req = snapshot.val();
+
   if (!req || req.status !== "pending") return;
 
-  const members = req.members || [];
-  if (!members.length) {
-    await update(ref(db, `add_members_requests/${reqKey}`), { status: "error", error: "No members provided" });
-    return;
-  }
+  const { groupLink, createdBy } = req;
 
-  // Load accounts for the user
+  console.log(`🚀 Export Request from ${createdBy} → ${groupLink}`);
+
   const accountsSnap = await get(ref(db, "telegram_accounts"));
-  const allAccounts = accountsSnap.val() || {};
-  const accountsList = Object.values(allAccounts).filter(acc => acc.createdBy === req.createdBy);
-  if (!accountsList.length) {
-    await update(ref(db, `add_members_requests/${reqKey}`), { status: "error", error: "No Telegram accounts available" });
+  const accounts = Object.values(accountsSnap.val() || {})
+    .filter(acc => acc.createdBy === createdBy && acc.session);
+
+  if (!accounts.length) {
+    await update(ref(db, `export_requests/${reqKey}`), {
+      status: "error",
+      error: "No accounts available"
+    });
     return;
   }
 
-  let accountIndex = 0;
+  for (const acc of accounts) {
 
-  for (const member of members) {
     try {
-      const acc = accountsList[accountIndex % accountsList.length]; // rotate accounts
-      accountIndex++;
 
       const client = new TelegramClient(
         new StringSession(acc.session),
@@ -48,44 +56,179 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
         acc.api_hash,
         { connectionRetries: 5 }
       );
+
       await client.start({ phoneNumber: null, password: null });
 
-      const targetEntity = await client.getEntity(req.targetGroup);
-      const userEntity = await client.getEntity(member); // username or user_id
+      console.log(`🔑 Logged with API_ID ${acc.api_id}`);
 
-      // ⚡ Use appropriate method for channels/supergroups
-      if (typeof client.addChatUser === "function") {
-        await client.addChatUser(targetEntity, userEntity, 0); // for basic chats
-      } else if (typeof client.addUserToChannel === "function") {
-        await client.addUserToChannel(targetEntity, userEntity); // supergroup/channel
-      } else {
-        throw new Error("No valid method to add member found in TelegramClient");
+      const group = await client.getEntity(groupLink);
+
+      for await (const user of client.iterParticipants(group)) {
+
+        const reqCheck = await get(ref(db, `export_requests/${reqKey}`));
+        if (reqCheck.val()?.status !== "pending") {
+          console.log("🛑 Export cancelled");
+          return;
+        }
+
+        await push(ref(db, `exported_members/${createdBy}`), {
+
+          id: user.id.toString(),
+          accessHash: user.accessHash?.toString() || null,
+          username: user.username || null,
+          firstName: user.firstName || null,
+          lastName: user.lastName || null,
+          groupLink: groupLink,
+          createdAt: Date.now()
+
+        });
+
       }
 
-      console.log(`✅ Added ${member} using account ${acc.api_id}`);
-
-      // Log to Firebase
-      await push(ref(db, `add_members_requests/${reqKey}/logs`), {
-        member,
-        status: "added",
-        timestamp: Date.now(),
-        accountUsed: acc.api_id
+      await update(ref(db, `export_requests/${reqKey}`), {
+        status: "done",
+        processedAt: Date.now()
       });
 
-      // 30 seconds delay
-      await new Promise(resolve => setTimeout(resolve, 30 * 1000));
+      console.log(`✅ Export Completed: ${groupLink}`);
+
+      break;
 
     } catch (err) {
-      console.error(`❌ Failed to add ${member}: ${err.message}`);
-      await push(ref(db, `add_members_requests/${reqKey}/logs`), {
-        member,
+
+      console.log(`❌ Account failed ${acc.api_id}: ${err.message}`);
+
+      await update(ref(db, `export_requests/${reqKey}`), {
         status: "error",
-        error: err.message,
-        timestamp: Date.now()
+        error: err.message
       });
+
     }
+
   }
 
-  await update(ref(db, `add_members_requests/${reqKey}`), { status: "done", processedAt: Date.now() });
-  console.log(`✅ Finished Add Members request ${reqKey}`);
+});
+
+/* =====================================================
+   ADD MEMBERS WORKER
+===================================================== */
+
+onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
+
+  const reqKey = snapshot.key;
+  const req = snapshot.val();
+
+  if (!req || req.status !== "pending") return;
+
+  const { targetGroup, members, createdBy } = req;
+
+  console.log(`📥 Add Members Request → ${targetGroup}`);
+
+  const accountsSnap = await get(ref(db, "telegram_accounts"));
+  const accounts = Object.values(accountsSnap.val() || {})
+    .filter(acc => acc.createdBy === createdBy && acc.session);
+
+  if (!accounts.length) {
+
+    await update(ref(db, `add_members_requests/${reqKey}`), {
+      status: "error",
+      error: "No accounts available"
+    });
+
+    return;
+  }
+
+  for (const acc of accounts) {
+
+    try {
+
+      const client = new TelegramClient(
+        new StringSession(acc.session),
+        parseInt(acc.api_id),
+        acc.api_hash,
+        { connectionRetries: 5 }
+      );
+
+      await client.start({ phoneNumber: null, password: null });
+
+      console.log(`🔑 Logged with API_ID ${acc.api_id}`);
+
+      const group = await client.getEntity(targetGroup);
+
+      for (const m of members) {
+
+        try {
+
+          const user = new Api.InputUser({
+            userId: BigInt(m.id),
+            accessHash: BigInt(m.accessHash || 0)
+          });
+
+          await client.invoke(
+            new Api.channels.InviteToChannel({
+              channel: group,
+              users: [user]
+            })
+          );
+
+          await push(ref(db, `added_members/${createdBy}`), {
+            username: m.username || null,
+            id: m.id,
+            group: targetGroup,
+            addedBy: acc.api_id,
+            createdAt: Date.now()
+          });
+
+          console.log(`✅ Added ${m.username || m.id}`);
+
+          await sleep(3000);
+
+        } catch (err) {
+
+          console.log(`❌ Failed ${m.username || m.id} → ${err.message}`);
+
+        }
+
+      }
+
+      await update(ref(db, `add_members_requests/${reqKey}`), {
+        status: "done",
+        processedAt: Date.now()
+      });
+
+      console.log(`🎉 Add Members Completed`);
+
+      break;
+
+    } catch (err) {
+
+      console.log(`❌ Account failed ${acc.api_id}: ${err.message}`);
+
+      continue;
+
+    }
+
+  }
+
+});
+
+/* =====================================================
+   EXPRESS SERVER
+===================================================== */
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+
+  res.send(`
+    <h1>Telegram Worker PRO+++</h1>
+    <p>Status: Running ✅</p>
+    <p>Export + Add Members Active</p>
+  `);
+
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on port ${PORT}`);
 });
