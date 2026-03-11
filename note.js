@@ -23,7 +23,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
    EXPORT MEMBERS WORKER
 ===================================================== */
 onChildAdded(ref(db, "export_requests"), async (snapshot) => {
-
   const reqKey = snapshot.key;
   const req = snapshot.val();
   if (!req || req.status !== "pending") return;
@@ -51,25 +50,23 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
         acc.api_hash,
         { connectionRetries: 5 }
       );
-
       await client.start({ phoneNumber: null, password: null });
-      console.log(`🔑 Logged with ${acc.phone}`);
+      console.log(`🔑 Logged with API_ID ${acc.api_id}`);
 
       const group = await client.getEntity(groupLink);
 
       for await (const user of client.iterParticipants(group)) {
-
         const reqCheck = await get(ref(db, `export_requests/${reqKey}`));
         if (reqCheck.val()?.status !== "pending") {
           console.log("🛑 Export cancelled");
           return;
         }
 
-        let profilePhoto = "https://via.placeholder.com/100?text=No+Photo";
+        let profilePhoto = null;
         try {
           const photoBlob = await client.downloadProfilePhoto(user, { file: "blob" });
           if (photoBlob) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photoBlob).toString("base64")}`;
-        } catch {}
+        } catch { profilePhoto = null; }
 
         await push(ref(db, `exported_members/${createdBy}`), {
           id: user.id.toString(),
@@ -79,9 +76,9 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
           lastName: user.lastName || null,
           profilePhoto,
           groupLink,
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          status: "success"
         });
-
       }
 
       await update(ref(db, `export_requests/${reqKey}`), {
@@ -93,7 +90,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
       break;
 
     } catch (err) {
-      console.log(`❌ Account failed ${acc.phone}: ${err.message}`);
+      console.log(`❌ Account failed ${acc.api_id}: ${err.message}`);
       await update(ref(db, `export_requests/${reqKey}`), {
         status: "error",
         error: err.message
@@ -102,12 +99,10 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
   }
 });
 
-
 /* =====================================================
    ADD MEMBERS WORKER
 ===================================================== */
 onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
-
   const reqKey = snapshot.key;
   const req = snapshot.val();
   if (!req || req.status !== "pending") return;
@@ -135,13 +130,23 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
         acc.api_hash,
         { connectionRetries: 5 }
       );
-
       await client.start({ phoneNumber: null, password: null });
-      console.log(`🔑 Logged with ${acc.phone}`);
+      console.log(`🔑 Logged with API_ID ${acc.api_id}`);
 
       const group = await client.getEntity(targetGroup);
 
       for (const m of members) {
+        let memberStatus = {
+          username: m.username || null,
+          id: m.id,
+          group: targetGroup,
+          addedBy: acc.api_id,
+          createdAt: Date.now(),
+          profilePhoto: m.profilePhoto || null,
+          status: "fail",
+          reason: "Unknown",
+          waitUntil: null
+        };
         try {
           const user = new Api.InputUser({
             userId: BigInt(m.id),
@@ -153,40 +158,25 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
             users: [user]
           }));
 
-          await push(ref(db, `added_members/${createdBy}`), {
-            username: m.username || null,
-            id: m.id,
-            group: targetGroup,
-            addedBy: acc.phone,
-            status: "success",
-            reason: null,
-            waitUntil: null,
-            createdAt: Date.now()
-          });
+          memberStatus.status = "success";
+          memberStatus.reason = null;
 
           console.log(`✅ Added ${m.username || m.id}`);
-          await sleep(3000);
 
         } catch (err) {
-          // Detect PEER_FLOOD or FLOOD_WAIT
-          let waitUntil = null;
-          if(err.errorMessage?.includes("PEER_FLOOD") || err.errorMessage?.includes("FLOOD_WAIT")){
-            waitUntil = Date.now() + 5*60*1000; // example wait 5min
-          }
+          const msg = err.message || "";
+          if (msg.includes("PEER_FLOOD")) memberStatus.reason = "PEER_FLOOD";
+          else if (msg.includes("FLOOD_WAIT")) {
+            memberStatus.reason = "FLOOD_WAIT";
+            const waitMatch = msg.match(/FLOOD_WAIT_(\d+)/i);
+            if (waitMatch) memberStatus.waitUntil = Date.now() + parseInt(waitMatch[1])*1000;
+          } else memberStatus.reason = "Unknown";
 
-          await push(ref(db, `added_members/${createdBy}`), {
-            username: m.username || null,
-            id: m.id,
-            group: targetGroup,
-            addedBy: acc.phone,
-            status: "fail",
-            reason: err.errorMessage || "Unknown",
-            waitUntil,
-            createdAt: Date.now()
-          });
-
-          console.log(`❌ Failed ${m.username || m.id} → ${err.errorMessage || "Unknown"}`);
+          console.log(`❌ Failed ${m.username || m.id} → ${memberStatus.reason}`);
         }
+
+        await push(ref(db, `added_members/${createdBy}`), memberStatus);
+        await sleep(3000); // delay per user
       }
 
       await update(ref(db, `add_members_requests/${reqKey}`), {
@@ -198,12 +188,11 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
       break;
 
     } catch (err) {
-      console.log(`❌ Account failed ${acc.phone}: ${err.message}`);
+      console.log(`❌ Account failed ${acc.api_id}: ${err.message}`);
       continue;
     }
   }
 });
-
 
 /* =====================================================
    EXPRESS SERVER
