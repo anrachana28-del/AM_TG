@@ -26,7 +26,6 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
 
   const reqKey = snapshot.key;
   const req = snapshot.val();
-
   if (!req || req.status !== "pending") return;
 
   const { groupLink, createdBy } = req;
@@ -54,7 +53,7 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
       );
 
       await client.start({ phoneNumber: null, password: null });
-      console.log(`🔑 Logged with API_ID ${acc.api_id}`);
+      console.log(`🔑 Logged with ${acc.phone}`);
 
       const group = await client.getEntity(groupLink);
 
@@ -66,16 +65,11 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
           return;
         }
 
-        // ===== Get profile photo URL or placeholder =====
         let profilePhoto = "https://via.placeholder.com/100?text=No+Photo";
         try {
           const photoBlob = await client.downloadProfilePhoto(user, { file: "blob" });
-          if (photoBlob) {
-            profilePhoto = `data:image/jpeg;base64,${Buffer.from(photoBlob).toString("base64")}`;
-          }
-        } catch (e) {
-          profilePhoto = "https://via.placeholder.com/100?text=No+Photo";
-        }
+          if (photoBlob) profilePhoto = `data:image/jpeg;base64,${Buffer.from(photoBlob).toString("base64")}`;
+        } catch {}
 
         await push(ref(db, `exported_members/${createdBy}`), {
           id: user.id.toString(),
@@ -99,15 +93,15 @@ onChildAdded(ref(db, "export_requests"), async (snapshot) => {
       break;
 
     } catch (err) {
-      console.log(`❌ Account failed ${acc.api_id}: ${err.message}`);
+      console.log(`❌ Account failed ${acc.phone}: ${err.message}`);
       await update(ref(db, `export_requests/${reqKey}`), {
         status: "error",
         error: err.message
       });
     }
   }
-
 });
+
 
 /* =====================================================
    ADD MEMBERS WORKER
@@ -116,7 +110,6 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
 
   const reqKey = snapshot.key;
   const req = snapshot.val();
-
   if (!req || req.status !== "pending") return;
 
   const { targetGroup, members, createdBy } = req;
@@ -144,7 +137,7 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
       );
 
       await client.start({ phoneNumber: null, password: null });
-      console.log(`🔑 Logged with API_ID ${acc.api_id}`);
+      console.log(`🔑 Logged with ${acc.phone}`);
 
       const group = await client.getEntity(targetGroup);
 
@@ -155,18 +148,19 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
             accessHash: BigInt(m.accessHash || 0)
           });
 
-          await client.invoke(
-            new Api.channels.InviteToChannel({
-              channel: group,
-              users: [user]
-            })
-          );
+          await client.invoke(new Api.channels.InviteToChannel({
+            channel: group,
+            users: [user]
+          }));
 
           await push(ref(db, `added_members/${createdBy}`), {
             username: m.username || null,
             id: m.id,
             group: targetGroup,
-            addedBy: acc.api_id,
+            addedBy: acc.phone,
+            status: "success",
+            reason: null,
+            waitUntil: null,
             createdAt: Date.now()
           });
 
@@ -174,7 +168,24 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
           await sleep(3000);
 
         } catch (err) {
-          console.log(`❌ Failed ${m.username || m.id} → ${err.message}`);
+          // Detect PEER_FLOOD or FLOOD_WAIT
+          let waitUntil = null;
+          if(err.errorMessage?.includes("PEER_FLOOD") || err.errorMessage?.includes("FLOOD_WAIT")){
+            waitUntil = Date.now() + 5*60*1000; // example wait 5min
+          }
+
+          await push(ref(db, `added_members/${createdBy}`), {
+            username: m.username || null,
+            id: m.id,
+            group: targetGroup,
+            addedBy: acc.phone,
+            status: "fail",
+            reason: err.errorMessage || "Unknown",
+            waitUntil,
+            createdAt: Date.now()
+          });
+
+          console.log(`❌ Failed ${m.username || m.id} → ${err.errorMessage || "Unknown"}`);
         }
       }
 
@@ -187,12 +198,12 @@ onChildAdded(ref(db, "add_members_requests"), async (snapshot) => {
       break;
 
     } catch (err) {
-      console.log(`❌ Account failed ${acc.api_id}: ${err.message}`);
+      console.log(`❌ Account failed ${acc.phone}: ${err.message}`);
       continue;
     }
   }
-
 });
+
 
 /* =====================================================
    EXPRESS SERVER
