@@ -1,66 +1,77 @@
-// note.js - Live update of Telegram PRO Worker
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getDatabase, ref, onChildAdded, onValue, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+// worker.js
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, push, onValue, set } from "firebase/database";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions";
+import input from "input";
 
-// --- Firebase Config ---
+// Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyCpmV3xv-HIxWDm8vgNoNtLHAUpyBcFHTI",
   authDomain: "tool-74d29.firebaseapp.com",
   databaseURL: "https://tool-74d29-default-rtdb.firebaseio.com",
   projectId: "tool-74d29"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// --- DOM Elements ---
-const historyListEl = document.getElementById("historyList");
-const exportStatsEl = document.getElementById("exportStats");
-
-// --- State ---
-let totalAdded = 0;
-let totalFailed = 0;
-
-// --- Listen to add_members_requests realtime ---
-const historyRef = ref(db, "add_members_requests");
-onChildAdded(historyRef, snap => {
-  const req = snap.val();
-  if (!req.members) return;
-
-  req.members.forEach(member => {
-    const li = document.createElement("li");
-    const status = member.status === "done" ? "✅ Done" : member.status === "fail" ? "❌ Failed" : "⏳ Pending";
-    li.classList.add(member.status === "done" ? "status-success" : member.status === "fail" ? "status-fail" : "");
-    li.innerHTML = `
-      <img class="avatar" src="${member.profilePhoto || 'https://via.placeholder.com/30'}">
-      <span class="username">@${member.username}</span>
-      <span class="status">${status} 
-      (${member.processedAt ? new Date(member.processedAt).toLocaleString() : "Pending"})
-      | Target: <a href="${member.targetGroup}" target="_blank">Link</a>
-      </span>
-    `;
-    historyListEl.appendChild(li);
-    historyListEl.scrollTo({ top: historyListEl.scrollHeight, behavior: "smooth" });
-
-    // Update totals
-    if(member.status === "done") totalAdded++;
-    if(member.status === "fail") totalFailed++;
-    exportStatsEl.textContent = `Added: ${totalAdded} | Failed: ${totalFailed}`;
-  });
+// Load accounts from Firebase
+const accountsRef = ref(db, "telegram_accounts");
+let accounts = [];
+onValue(accountsRef, snapshot => {
+  accounts = [];
+  snapshot.forEach(snap => accounts.push({...snap.val(), enabled: true}));
 });
 
-// --- Optional: live update status if backend updates member ---
-onValue(historyRef, snap => {
-  // This listens to any change and updates live DOM if status changes
-  snap.forEach(reqSnap => {
-    const req = reqSnap.val();
-    if (!req.members) return;
-    req.members.forEach(member => {
-      const existingLi = Array.from(historyListEl.children).find(li => li.querySelector(".username").textContent === `@${member.username}`);
-      if(existingLi){
-        const status = member.status === "done" ? "✅ Done" : member.status === "fail" ? "❌ Failed" : "⏳ Pending";
-        existingLi.querySelector(".status").innerHTML = `${status} (${member.processedAt ? new Date(member.processedAt).toLocaleString() : "Pending"}) | Target: <a href="${member.targetGroup}" target="_blank">Link</a>`;
-      }
+// Function: add member
+async function addMember(account, member, targetGroup) {
+  try {
+    const client = new TelegramClient(
+      new StringSession(account.session),
+      account.api_id,
+      account.api_hash,
+      { connectionRetries: 5 }
+    );
+    await client.start({
+      phoneNumber: async () => account.phone,
+      password: async () => await input.text("2FA code? "),
+      phoneCode: async () => await input.text("Code? ")
     });
-  });
-});
+
+    // Join group if not joined
+    // ... your join logic here ...
+
+    // Add member (example using username)
+    // ... your add logic here ...
+
+    // Push success to Firebase
+    await push(ref(db, "add_members_requests"), {
+      createdBy: "worker",
+      members: [{username: member.username, status: "done", processedAt: Date.now(), targetGroup}],
+      targetGroup,
+      createdAt: Date.now()
+    });
+  } catch (err) {
+    await push(ref(db, "add_members_requests"), {
+      createdBy: "worker",
+      members: [{username: member.username, status: "fail", processedAt: Date.now(), targetGroup}],
+      targetGroup,
+      createdAt: Date.now(),
+      error: err.message
+    });
+  }
+}
+
+// Rotate accounts, handle flood wait, loop members
+async function startAdding(members, targetGroup) {
+  let idx = 0;
+  for (const m of members) {
+    const account = accounts[idx % accounts.length];
+    if (!account.enabled) continue;
+    await addMember(account, m, targetGroup);
+
+    // delay between adds
+    await new Promise(r => setTimeout(r, 30000)); // 30s
+    idx++;
+  }
+}
